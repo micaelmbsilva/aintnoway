@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Simple ECMWF Weather</title>
+
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: system-ui, sans-serif;
+        background: #f4f6f8;
+        margin: 0;
+        padding: 30px;
+        color: #222;
+      }
+
+      .container {
+        max-width: 900px;
+        margin: auto;
+      }
+
+      h1 {
+        margin-bottom: 20px;
+      }
+
+      .search {
+        display: flex;
+        gap: 10px;
+        margin-bottom: 20px;
+      }
+
+      input {
+        flex: 1;
+        padding: 14px;
+        border-radius: 10px;
+        border: 1px solid #ccc;
+        font-size: 16px;
+      }
+
+      button {
+        padding: 14px 20px;
+        border: none;
+        border-radius: 10px;
+        cursor: pointer;
+        font-size: 16px;
+      }
+
+      .card {
+        background: white;
+        border-radius: 16px;
+        padding: 24px;
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+        margin-bottom: 20px;
+      }
+
+      .main-weather {
+        display: flex;
+        gap: 30px;
+        flex-wrap: wrap;
+        margin-top: 20px;
+      }
+
+      .metric {
+        min-width: 150px;
+      }
+
+      .metric h2 {
+        margin: 0;
+        font-size: 28px;
+      }
+
+      .metric p {
+        margin: 5px 0 0;
+        color: #666;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        padding: 12px;
+        text-align: left;
+        border-bottom: 1px solid #eee;
+      }
+
+      th {
+        background: #fafafa;
+      }
+
+      .small {
+        color: #666;
+        font-size: 14px;
+      }
+
+      .loading {
+        color: #666;
+      }
+
+      .error {
+        color: #d00;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="container">
+      <h1>🌤 ECMWF Weather</h1>
+
+      <div class="search">
+        <input
+          id="cityInput"
+          placeholder="Enter city (e.g. Warsaw)"
+          value="Warsaw"
+        />
+        <button onclick="getWeather()">Check</button>
+      </div>
+
+      <div id="result"></div>
+    </div>
+
+    <script>
+      async function getWeather() {
+        const city = document.getElementById("cityInput").value.trim();
+        const result = document.getElementById("result");
+
+        if (!city) return;
+
+        result.innerHTML = '<p class="loading">Loading weather...</p>';
+
+        try {
+          // 1. Geocoding
+          const geoRes = await fetch(
+            `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1`,
+          );
+
+          const geoData = await geoRes.json();
+
+          if (!geoData.results || geoData.results.length === 0) {
+            throw new Error("City not found");
+          }
+
+          const place = geoData.results[0];
+          const lat = place.latitude;
+          const lon = place.longitude;
+
+          // 2. ECMWF forecast
+          const weatherUrl =
+            `https://api.open-meteo.com/v1/ecmwf` +
+            `?latitude=${lat}` +
+            `&longitude=${lon}` +
+            `&current=` +
+            `temperature_2m,wind_speed_10m,cloud_cover,precipitation_probability` +
+            `&hourly=` +
+            `temperature_2m,wind_speed_10m,precipitation_probability,cloud_cover` +
+            `&forecast_days=2` +
+            `&timezone=auto`;
+
+          const weatherRes = await fetch(weatherUrl);
+          const weather = await weatherRes.json();
+
+          const current = weather.current;
+
+          // first 24 hours
+          const rows = weather.hourly.time
+            .slice(0, 24)
+            .map((time, i) => {
+              return `
+                <tr>
+                    <td>${new Date(time).toLocaleTimeString([], {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}</td>
+                    <td>${weather.hourly.temperature_2m[i]}°C</td>
+                    <td>${weather.hourly.wind_speed_10m[i]} km/h</td>
+                    <td>${weather.hourly.precipitation_probability[i]}%</td>
+                    <td>${weather.hourly.cloud_cover[i]}%</td>
+                </tr>
+            `;
+            })
+            .join("");
+
+          result.innerHTML = `
+            <div class="card">
+                <h2>
+                    ${place.name}
+                    <span class="small">
+                        ${place.country}
+                    </span>
+                </h2>
+
+                <p class="small">
+                    ECMWF forecast
+                </p>
+
+                <div class="main-weather">
+                    <div class="metric">
+                        <h2>${current.temperature_2m}°C</h2>
+                        <p>Temperature</p>
+                    </div>
+
+                    <div class="metric">
+                        <h2>${current.wind_speed_10m} km/h</h2>
+                        <p>Wind</p>
+                    </div>
+
+                    <div class="metric">
+                        <h2>${current.precipitation_probability ?? 0}%</h2>
+                        <p>Rain probability</p>
+                    </div>
+
+                    <div class="metric">
+                        <h2>${current.cloud_cover}%</h2>
+                        <p>Cloud cover</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <h3>Next 24 hours</h3>
+
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Time</th>
+                            <th>Temp</th>
+                            <th>Wind</th>
+                            <th>Rain %</th>
+                            <th>Clouds</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rows}
+                    </tbody>
+                </table>
+            </div>
+        `;
+        } catch (err) {
+          result.innerHTML = `<p class="error">Error: ${err.message}</p>`;
+        }
+      }
+
+      // auto load Warsaw on open
+      getWeather();
+    </script>
+  </body>
+</html>
