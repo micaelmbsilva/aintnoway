@@ -126,8 +126,10 @@
 
     <script>
       async function getWeather() {
+        console.log("🔍 Starting weather fetch...");
         const city = document.getElementById("cityInput").value.trim();
         const result = document.getElementById("result");
+        console.log("📍 City input:", city);
 
         if (!city) return;
 
@@ -135,11 +137,14 @@
 
         try {
           // 1. Geocoding
+          console.log("🌍 Fetching geocoding data for:", city);
           const geoRes = await fetch(
             `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1`,
           );
+          console.log("✅ Geocoding response status:", geoRes.status);
 
           const geoData = await geoRes.json();
+          console.log("📊 Geocoding data:", geoData);
 
           if (!geoData.results || geoData.results.length === 0) {
             throw new Error("City not found");
@@ -148,8 +153,10 @@
           const place = geoData.results[0];
           const lat = place.latitude;
           const lon = place.longitude;
+          console.log("📌 Found location:", place.name, `(${lat}, ${lon})`);
 
           // 2. ECMWF forecast
+          console.log("🌦️ Fetching weather data...");
           const weatherUrl =
             `https://api.open-meteo.com/v1/ecmwf` +
             `?latitude=${lat}` +
@@ -162,9 +169,23 @@
             `&timezone=auto`;
 
           const weatherRes = await fetch(weatherUrl);
+          console.log("✅ Weather response status:", weatherRes.status);
           const weather = await weatherRes.json();
+          console.log("📊 Weather data:", weather);
+          console.log(
+            "🔑 Available keys in weather object:",
+            Object.keys(weather),
+          );
 
-          const current = weather.current;
+          // API only has hourly data, use first hour as current
+          const current = {
+            temperature_2m: weather.hourly.temperature_2m[0],
+            wind_speed_10m: weather.hourly.wind_speed_10m[0],
+            precipitation_probability:
+              weather.hourly.precipitation_probability[0],
+            cloud_cover: weather.hourly.cloud_cover[0],
+          };
+          console.log("❓ Current object (from first hour):", current);
 
           // first 24 hours
           const rows = weather.hourly.time
@@ -240,7 +261,10 @@
                 </table>
             </div>
         `;
+          console.log("✨ Weather display rendered successfully");
         } catch (err) {
+          console.error("❌ Error occurred:", err.message);
+          console.error("Full error:", err);
           result.innerHTML = `<p class="error">Error: ${err.message}</p>`;
         }
       }
