@@ -22,6 +22,10 @@
         --accent-text: #ffffff;
         --chip: #f0efec;
         --error: #d03b3b;
+        --feels: #1baf7a;
+        --clouds: #eda100;
+        --humid: #e87ba4;
+        --wind: #008300;
       }
 
       @media (prefers-color-scheme: dark) {
@@ -41,6 +45,10 @@
           --accent-text: #ffffff;
           --chip: #262624;
           --error: #e66767;
+          --feels: #199e70;
+          --clouds: #c98500;
+          --humid: #d55181;
+          --wind: #008300;
         }
       }
 
@@ -60,6 +68,10 @@
         --accent-text: #ffffff;
         --chip: #262624;
         --error: #e66767;
+        --feels: #199e70;
+        --clouds: #c98500;
+        --humid: #d55181;
+        --wind: #008300;
       }
 
       * {
@@ -100,6 +112,12 @@
         font-size: 16px;
         cursor: pointer;
         color: var(--text);
+      }
+
+      .btn-sm {
+        padding: 4px 10px;
+        font-size: 13px;
+        border-radius: 8px;
       }
 
       .search {
@@ -271,31 +289,78 @@
         font-size: 13px;
       }
 
-      .legend {
+      .series-chips {
         display: flex;
-        gap: 18px;
-        margin-bottom: 6px;
-        font-size: 13px;
-        color: var(--text-2);
         flex-wrap: wrap;
+        gap: 8px;
+        margin-bottom: 12px;
       }
 
-      .legend .key {
+      .schip {
         display: inline-flex;
         align-items: center;
-        gap: 6px;
+        gap: 7px;
+        padding: 6px 12px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--chip);
+        color: var(--text-2);
+        font-size: 13px;
+        cursor: pointer;
       }
 
-      .legend .swatch {
-        width: 12px;
-        height: 12px;
+      .schip .swatch {
+        width: 11px;
+        height: 11px;
         border-radius: 3px;
         display: inline-block;
       }
 
-      .legend .swatch.line {
-        height: 3px;
-        border-radius: 2px;
+      .schip.off {
+        opacity: 0.55;
+      }
+
+      .schip.off .swatch {
+        background: var(--muted) !important;
+      }
+
+      .overview {
+        margin-top: 4px;
+      }
+
+      .overview svg {
+        width: 100%;
+        height: auto;
+        display: block;
+        touch-action: none;
+        cursor: grab;
+      }
+
+      .overview svg.dragging {
+        cursor: grabbing;
+      }
+
+      .overview svg:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 2px;
+        border-radius: 6px;
+      }
+
+      .chart-wrap svg {
+        touch-action: pan-y;
+      }
+
+      .range-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-top: 4px;
+      }
+
+      .range-controls {
+        display: flex;
+        gap: 6px;
       }
 
       .chart-wrap {
@@ -364,14 +429,36 @@
         font-size: 13px;
       }
 
+      .now-row td {
+        background: color-mix(in srgb, var(--accent) 12%, transparent);
+      }
+
+      .now-row td:first-child {
+        font-weight: 600;
+      }
+
       .daily-row {
         display: grid;
         grid-template-columns: 82px 34px 1fr auto auto;
         align-items: center;
         gap: 10px;
-        padding: 9px 0;
+        padding: 9px 6px;
         border-bottom: 1px solid var(--grid);
         font-size: 15px;
+        background: none;
+        border-left: none;
+        border-right: none;
+        border-top: none;
+        width: 100%;
+        font-family: inherit;
+        color: inherit;
+        text-align: left;
+        cursor: pointer;
+        border-radius: 8px;
+      }
+
+      .daily-row:hover {
+        background: var(--chip);
       }
 
       .daily-row:last-child {
@@ -451,7 +538,7 @@
     <div class="container">
       <div class="topbar">
         <h1>🌤 Weather</h1>
-        <button id="themeToggle" class="icon-btn" title="Toggle dark mode">🌙</button>
+        <button id="themeToggle" class="icon-btn" title="Toggle dark mode" aria-label="Toggle dark mode">🌙</button>
       </div>
 
       <div class="search">
@@ -465,7 +552,7 @@
           <div id="dropdown" class="dropdown"></div>
         </div>
         <button class="primary" id="searchBtn">Check</button>
-        <button class="icon-btn" id="geoBtn" title="Use my location">📍</button>
+        <button class="icon-btn" id="geoBtn" title="Use my location" aria-label="Use my location">📍</button>
       </div>
 
       <div id="recents" class="recents"></div>
@@ -600,7 +687,7 @@
         const url =
           `${FORECAST_URL}?latitude=${lat}&longitude=${lon}` +
           `&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,cloud_cover,wind_speed_10m,precipitation` +
-          `&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,weather_code,wind_speed_10m,cloud_cover` +
+          `&hourly=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation_probability,precipitation,weather_code,wind_speed_10m,cloud_cover` +
           `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,sunrise,sunset` +
           `&forecast_days=7&timezone=auto`;
         const res = await fetch(url);
@@ -611,7 +698,38 @@
       // ---------- rendering ----------
 
       const resultEl = document.getElementById("result");
+      const WINDOW = 24; // hours shown in the chart and detail table
+      let wxData = null; // last forecast response
+      let windowStart = 0; // hourly index where the visible window starts
       let hoverHours = []; // data behind the chart hover layer
+
+      // Chart series: chips act as both legend and toggles.
+      const SERIES = {
+        temp: { label: "Temperature", varName: "--temp", on: true },
+        feels: { label: "Feels like", varName: "--feels", on: false },
+        rain: { label: "Rain chance", varName: "--rain", on: true },
+        clouds: { label: "Clouds", varName: "--clouds", on: false },
+        humid: { label: "Humidity", varName: "--humid", on: false },
+        wind: { label: "Wind", varName: "--wind", on: false },
+      };
+      try {
+        const saved = JSON.parse(localStorage.getItem("wx-series")) || {};
+        for (const k in SERIES)
+          if (typeof saved[k] === "boolean") SERIES[k].on = saved[k];
+      } catch {}
+
+      function saveSeries() {
+        const s = {};
+        for (const k in SERIES) s[k] = SERIES[k].on;
+        localStorage.setItem("wx-series", JSON.stringify(s));
+      }
+
+      // Narrow containers get a smaller viewBox so SVG text stays legible.
+      function isCompact() {
+        const el = document.getElementById("chartWrap");
+        return (el ? el.clientWidth : innerWidth) < 480;
+      }
+      let compactState = null; // bucket the charts were last rendered for
 
       function renderCurrent(place, w) {
         const c = w.current;
@@ -620,9 +738,14 @@
           <div class="card">
             <div class="place-row">
               <h2>${escapeHtml(place.name)}</h2>
-              <span class="small">${escapeHtml(
-                [place.admin1, place.country].filter(Boolean).join(", "),
-              )}</span>
+              <span class="small">${[
+                escapeHtml(
+                  [place.admin1, place.country].filter(Boolean).join(", "),
+                ),
+                `Local time ${timeTag(c.time)}`,
+              ]
+                .filter(Boolean)
+                .join(" · ")}</span>
             </div>
             <div class="now">
               <div class="icon">${icon}</div>
@@ -641,167 +764,480 @@
               <div class="metric"><b>${c.precipitation} mm</b><span>Precipitation</span></div>
             </div>
             <div class="sun-row">
-              <span>🌅 ${clockLabel(w.daily.sunrise[0])}</span>
-              <span>🌇 ${clockLabel(w.daily.sunset[0])}</span>
+              <span title="Sunrise" aria-label="Sunrise ${clockLabel(w.daily.sunrise[0])}">🌅 ${clockLabel(w.daily.sunrise[0])}</span>
+              <span title="Sunset" aria-label="Sunset ${clockLabel(w.daily.sunset[0])}">🌇 ${clockLabel(w.daily.sunset[0])}</span>
             </div>
           </div>`;
       }
 
-      // Next 24 hours starting from the hour containing "now" (location time).
-      function next24Hours(w) {
-        const h = w.hourly;
-        let start = h.time.findIndex((t) => t > w.current.time) - 1;
-        if (start < 0) start = 0;
-        const hours = [];
-        for (let i = start; i < Math.min(start + 24, h.time.length); i++) {
-          hours.push({
-            time: h.time[i],
-            label: clockLabel(h.time[i]),
-            temp: h.temperature_2m[i],
-            wind: h.wind_speed_10m[i],
-            prob: h.precipitation_probability[i],
-            precip: h.precipitation[i],
-            clouds: h.cloud_cover[i],
-            code: h.weather_code[i],
-          });
-        }
-        return hours;
+      // Hourly index of the hour containing "now" (location time).
+      function currentHourIndex(w) {
+        const i = w.hourly.time.findIndex((t) => t > w.current.time) - 1;
+        return i < 0 ? 0 : i;
       }
 
-      // Two stacked panels sharing one time axis: temperature line on top,
-      // rain-probability bars below (a meteogram — never a dual-axis overlay).
+      function hourAt(w, i) {
+        const h = w.hourly;
+        return {
+          time: h.time[i],
+          label: clockLabel(h.time[i]),
+          temp: h.temperature_2m[i],
+          feels: h.apparent_temperature[i],
+          wind: h.wind_speed_10m[i],
+          prob: h.precipitation_probability[i],
+          precip: h.precipitation[i],
+          clouds: h.cloud_cover[i],
+          humid: h.relative_humidity_2m[i],
+          code: h.weather_code[i],
+        };
+      }
+
+      function windowHours(w, start) {
+        const out = [];
+        const end = Math.min(start + WINDOW, w.hourly.time.length);
+        for (let i = start; i < end; i++) out.push(hourAt(w, i));
+        return out;
+      }
+
+      // Stacked panels sharing one time axis, one per unit family (a
+      // meteogram — never a dual-axis overlay). Panels appear only when a
+      // series in them is toggled on.
       function renderChartSvg(hours) {
-        const W = 760;
-        const H = 248;
-        const padL = 38;
+        const compact = isCompact();
+        compactState = compact;
+        const W = compact ? 400 : 760;
+        const padL = compact ? 40 : 46;
         const padR = 14;
         const innerW = W - padL - padR;
         const step = innerW / hours.length;
-
-        const T = { top: 14, bottom: 118 }; // temperature panel
-        const P = { top: 152, bottom: 212 }; // precipitation panel
-        const labelY = 234;
-
-        const temps = hours.map((h) => h.temp);
-        const tMin = Math.floor(Math.min(...temps)) - 1;
-        const tMax = Math.ceil(Math.max(...temps)) + 1;
-        const ty = (v) =>
-          T.bottom - ((v - tMin) / (tMax - tMin)) * (T.bottom - T.top);
-        const py = (v) => P.bottom - (v / 100) * (P.bottom - P.top);
         const cx = (i) => padL + step * (i + 0.5);
+
+        const panels = {};
+        let cursor = 14;
+        function addPanel(key, height) {
+          panels[key] = { top: cursor, bottom: cursor + height };
+          cursor += height + 26;
+        }
+        if (SERIES.temp.on || SERIES.feels.on) addPanel("temp", 100);
+        if (SERIES.rain.on || SERIES.clouds.on || SERIES.humid.on)
+          addPanel("pct", 68);
+        if (SERIES.wind.on) addPanel("wind", 56);
+
+        if (!Object.keys(panels).length) {
+          return '<p class="small">Turn on a series above to show the chart.</p>';
+        }
+
+        const lastBottom = cursor - 26;
+        const labelY = lastBottom + 18;
+        const H = labelY + 10;
 
         let s = "";
 
-        // temperature gridlines + clean ticks
-        const mid = Math.round((tMin + tMax) / 2);
-        for (const v of [tMin + 1, mid, tMax - 1]) {
-          s += `<line x1="${padL}" y1="${ty(v)}" x2="${W - padR}" y2="${ty(v)}"
+        const line = (vals, y, color) =>
+          `<polyline points="${vals
+            .map((v, i) => `${cx(i)},${y(v ?? 0)}`)
+            .join(" ")}" fill="none" stroke="${color}" stroke-width="2"
+             stroke-linejoin="round" stroke-linecap="round" />`;
+
+        if (panels.temp) {
+          const p = panels.temp;
+          const vals = [];
+          if (SERIES.temp.on) vals.push(...hours.map((h) => h.temp));
+          if (SERIES.feels.on) vals.push(...hours.map((h) => h.feels));
+          const tMin = Math.floor(Math.min(...vals)) - 1;
+          const tMax = Math.ceil(Math.max(...vals)) + 1;
+          const ty = (v) =>
+            p.bottom - ((v - tMin) / (tMax - tMin)) * (p.bottom - p.top);
+          const mid = Math.round((tMin + tMax) / 2);
+          for (const v of [tMin + 1, mid, tMax - 1]) {
+            s += `<line x1="${padL}" y1="${ty(v)}" x2="${W - padR}" y2="${ty(v)}"
+                    stroke="var(--grid)" stroke-width="1" />
+                  <text x="${padL - 6}" y="${ty(v) + 4}" text-anchor="end"
+                    font-size="11" fill="var(--muted)">${v}°</text>`;
+          }
+          if (SERIES.feels.on)
+            s += line(hours.map((h) => h.feels), ty, "var(--feels)");
+          if (SERIES.temp.on) {
+            const temps = hours.map((h) => h.temp);
+            s += line(temps, ty, "var(--temp)");
+            // direct labels on the extremes only
+            const iMax = temps.indexOf(Math.max(...temps));
+            const iMin = temps.indexOf(Math.min(...temps));
+            for (const [i, dy] of [
+              [iMax, -8],
+              [iMin, 16],
+            ]) {
+              s += `<circle cx="${cx(i)}" cy="${ty(temps[i])}" r="4"
+                      fill="var(--temp)" stroke="var(--surface)" stroke-width="2" />
+                    <text x="${cx(i)}" y="${ty(temps[i]) + dy}" text-anchor="middle"
+                      font-size="12" font-weight="600" fill="var(--text)">${Math.round(
+                        temps[i],
+                      )}°</text>`;
+            }
+          }
+        }
+
+        if (panels.pct) {
+          const p = panels.pct;
+          const py = (v) => p.bottom - ((v ?? 0) / 100) * (p.bottom - p.top);
+          for (const v of [50, 100]) {
+            s += `<line x1="${padL}" y1="${py(v)}" x2="${W - padR}" y2="${py(v)}"
+                    stroke="var(--grid)" stroke-width="1" />
+                  <text x="${padL - 6}" y="${py(v) + 4}" text-anchor="end"
+                    font-size="11" fill="var(--muted)">${v}%</text>`;
+          }
+          s += `<line x1="${padL}" y1="${p.bottom}" x2="${W - padR}" y2="${p.bottom}"
+                  stroke="var(--baseline)" stroke-width="1" />`;
+          const rainOnly =
+            SERIES.rain.on && !SERIES.clouds.on && !SERIES.humid.on;
+          const dry = hours.every(
+            (h) => (h.prob ?? 0) <= 2 && !h.precip,
+          );
+          if (rainOnly && dry) {
+            s += `<text x="${padL + innerW / 2}" y="${(p.top + p.bottom) / 2 + 4}"
+                    text-anchor="middle" font-size="12"
+                    fill="var(--muted)">No rain expected</text>`;
+          } else if (SERIES.rain.on) {
+            // rain-probability bars: thin, rounded data-end, square baseline
+            const barW = Math.min(16, step - 4);
+            for (let i = 0; i < hours.length; i++) {
+              const prob = hours[i].prob ?? 0;
+              if (prob <= 0) continue;
+              const x = cx(i) - barW / 2;
+              const yTop = py(prob);
+              const r = Math.min(4, p.bottom - yTop);
+              s += `<path d="M${x},${p.bottom} V${yTop + r}
+                      Q${x},${yTop} ${x + r},${yTop}
+                      H${x + barW - r}
+                      Q${x + barW},${yTop} ${x + barW},${yTop + r}
+                      V${p.bottom} Z" fill="var(--rain)" />`;
+            }
+          }
+          if (SERIES.clouds.on)
+            s += line(hours.map((h) => h.clouds), py, "var(--clouds)");
+          if (SERIES.humid.on)
+            s += line(hours.map((h) => h.humid), py, "var(--humid)");
+        }
+
+        if (panels.wind) {
+          const p = panels.wind;
+          const wMax = Math.max(
+            10,
+            Math.ceil(Math.max(...hours.map((h) => h.wind)) / 10) * 10,
+          );
+          const wy = (v) => p.bottom - (v / wMax) * (p.bottom - p.top);
+          s += `<line x1="${padL}" y1="${p.top}" x2="${W - padR}" y2="${p.top}"
                   stroke="var(--grid)" stroke-width="1" />
-                <text x="${padL - 6}" y="${ty(v) + 4}" text-anchor="end"
-                  font-size="11" fill="var(--muted)">${v}°</text>`;
+                <text x="${padL - 6}" y="${p.top + 4}" text-anchor="end"
+                  font-size="11" fill="var(--muted)">${wMax}</text>
+                <text x="${padL - 6}" y="${p.bottom + 2}" text-anchor="end"
+                  font-size="10" fill="var(--muted)">km/h</text>
+                <line x1="${padL}" y1="${p.bottom}" x2="${W - padR}" y2="${p.bottom}"
+                  stroke="var(--baseline)" stroke-width="1" />`;
+          s += line(hours.map((h) => h.wind), wy, "var(--wind)");
         }
 
-        // temperature line
-        const pts = hours.map((h, i) => `${cx(i)},${ty(h.temp)}`).join(" ");
-        s += `<polyline points="${pts}" fill="none" stroke="var(--temp)"
-                stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />`;
-
-        // direct labels on the extremes only
-        const iMax = temps.indexOf(Math.max(...temps));
-        const iMin = temps.indexOf(Math.min(...temps));
-        for (const [i, dy] of [
-          [iMax, -8],
-          [iMin, 16],
-        ]) {
-          s += `<circle cx="${cx(i)}" cy="${ty(temps[i])}" r="4"
-                  fill="var(--temp)" stroke="var(--surface)" stroke-width="2" />
-                <text x="${cx(i)}" y="${ty(temps[i]) + dy}" text-anchor="middle"
-                  font-size="12" font-weight="600" fill="var(--text)">${Math.round(
-                    temps[i],
-                  )}°</text>`;
-        }
-
-        // precipitation panel: 100% gridline + baseline
-        s += `<line x1="${padL}" y1="${py(100)}" x2="${W - padR}" y2="${py(100)}"
-                stroke="var(--grid)" stroke-width="1" />
-              <text x="${padL - 6}" y="${py(100) + 4}" text-anchor="end"
-                font-size="11" fill="var(--muted)">100%</text>
-              <line x1="${padL}" y1="${P.bottom}" x2="${W - padR}" y2="${P.bottom}"
-                stroke="var(--baseline)" stroke-width="1" />`;
-
-        // rain-probability bars: thin, rounded data-end, square baseline
-        const barW = Math.min(16, step - 4);
-        for (let i = 0; i < hours.length; i++) {
-          const prob = hours[i].prob ?? 0;
-          if (prob <= 0) continue;
-          const x = cx(i) - barW / 2;
-          const yTop = py(prob);
-          const hgt = P.bottom - yTop;
-          const r = Math.min(4, hgt);
-          s += `<path d="M${x},${P.bottom} V${yTop + r}
-                  Q${x},${yTop} ${x + r},${yTop}
-                  H${x + barW - r}
-                  Q${x + barW},${yTop} ${x + barW},${yTop + r}
-                  V${P.bottom} Z" fill="var(--rain)" />`;
-        }
-
-        // shared hour labels every 3 hours
-        for (let i = 0; i < hours.length; i += 3) {
+        // shared hour labels (sparser when compact)
+        for (let i = 0; i < hours.length; i += compact ? 6 : 3) {
           s += `<text x="${cx(i)}" y="${labelY}" text-anchor="middle"
                   font-size="11" fill="var(--muted)">${hours[i].label}</text>`;
         }
 
         // crosshair (moved by the hover handler)
-        s += `<line id="crosshair" x1="0" y1="${T.top}" x2="0" y2="${P.bottom}"
+        s += `<line id="crosshair" x1="0" y1="14" x2="0" y2="${lastBottom}"
                 stroke="var(--baseline)" stroke-width="1" visibility="hidden" />`;
 
         return `<svg id="hourlyChart" viewBox="0 0 ${W} ${H}"
                   data-padl="${padL}" data-padr="${padR}" data-w="${W}"
-                  role="img" aria-label="24 hour temperature and rain probability chart">${s}</svg>`;
+                  role="img" aria-label="Hourly forecast chart">${s}</svg>`;
       }
 
-      function renderHourlyCard(hours) {
-        const rows = hours
+      function renderHourlyCard() {
+        return `
+          <div class="card">
+            <h3>Hourly forecast</h3>
+            <div class="series-chips" id="seriesChips"></div>
+            <div class="chart-wrap" id="chartWrap"></div>
+            <div class="overview" id="overviewWrap"></div>
+            <details id="hourlyDetails"${
+              localStorage.getItem("wx-details-open") === "1" ? " open" : ""
+            }>
+              <summary>Hourly details</summary>
+              <div class="table-wrap" id="hourlyTable"></div>
+            </details>
+          </div>`;
+      }
+
+      function refreshChips() {
+        document.getElementById("seriesChips").innerHTML = Object.entries(
+          SERIES,
+        )
           .map(
-            (h) => `
-              <tr>
+            ([k, sr]) => `
+              <button class="schip${sr.on ? "" : " off"}" data-k="${k}"
+                aria-pressed="${sr.on}">
+                <span class="swatch" style="background:var(${sr.varName})"></span>${sr.label}
+              </button>`,
+          )
+          .join("");
+      }
+
+      function refreshChart() {
+        hoverHours = windowHours(wxData, windowStart);
+        document.getElementById("chartWrap").innerHTML =
+          renderChartSvg(hoverHours) +
+          '<div class="tooltip" id="chartTip"></div>';
+        attachChartHover();
+      }
+
+      function refreshTable() {
+        const ni = currentHourIndex(wxData);
+        const rows = hoverHours
+          .map(
+            (h, idx) => `
+              <tr${
+                windowStart + idx === ni
+                  ? ' class="now-row" aria-current="time"'
+                  : ""
+              }>
                 <td>${h.label}</td>
                 <td>${wmo(h.code)[0]}</td>
                 <td>${Math.round(h.temp)}°C</td>
-                <td>${Math.round(h.wind)} km/h</td>
+                <td>${Math.round(h.feels)}°C</td>
                 <td>${h.prob ?? "–"}%</td>
                 <td>${h.precip} mm</td>
+                <td>${Math.round(h.wind)} km/h</td>
                 <td>${h.clouds}%</td>
+                <td>${h.humid}%</td>
               </tr>`,
           )
           .join("");
+        document.getElementById("hourlyTable").innerHTML = `
+          <table>
+            <thead>
+              <tr>
+                <th>Time</th><th></th><th>Temp</th><th>Feels</th>
+                <th>Rain %</th><th>Rain mm</th><th>Wind</th>
+                <th>Clouds</th><th>Humidity</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>`;
+      }
 
-        return `
-          <div class="card">
-            <h3>Next 24 hours</h3>
-            <div class="legend">
-              <span class="key"><span class="swatch line" style="background:var(--temp)"></span>Temperature</span>
-              <span class="key"><span class="swatch" style="background:var(--rain)"></span>Rain chance</span>
-            </div>
-            <div class="chart-wrap" id="chartWrap">
-              ${renderChartSvg(hours)}
-              <div class="tooltip" id="chartTip"></div>
-            </div>
-            <details>
-              <summary>Hourly details</summary>
-              <div class="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>Time</th><th></th><th>Temp</th><th>Wind</th>
-                      <th>Rain %</th><th>Rain mm</th><th>Clouds</th>
-                    </tr>
-                  </thead>
-                  <tbody>${rows}</tbody>
-                </table>
-              </div>
-            </details>
-          </div>`;
+      // ---------- 7-day overview strip with a draggable 24h window ----------
+
+      const OV = { W: 760, H: 70, padL: 8, padR: 8, top: 8, bottom: 48, labelY: 64 };
+
+      function timeTag(iso) {
+        const wd = new Date(iso.slice(0, 10) + "T12:00").toLocaleDateString(
+          undefined,
+          { weekday: "short" },
+        );
+        return `${wd} ${iso.slice(11, 16)}`;
+      }
+
+      function windowRectX() {
+        const svg = document.getElementById("overviewSvg");
+        const W = svg ? +svg.dataset.w : OV.W;
+        const n = wxData.hourly.time.length;
+        const x = (i) => OV.padL + (i / (n - 1)) * (W - OV.padL - OV.padR);
+        return {
+          x0: x(windowStart),
+          x1: x(Math.min(windowStart + WINDOW, n - 1)),
+        };
+      }
+
+      function renderOverviewSvg() {
+        const W = isCompact() ? 400 : 760;
+        const h = wxData.hourly;
+        const n = h.time.length;
+        const x = (i) => OV.padL + (i / (n - 1)) * (W - OV.padL - OV.padR);
+        const temps = h.temperature_2m;
+        const tMin = Math.min(...temps);
+        const tMax = Math.max(...temps);
+        const ty = (v) =>
+          OV.bottom -
+          ((v - tMin) / (tMax - tMin || 1)) * (OV.bottom - OV.top);
+        const gripTop = (4 + OV.bottom) / 2 - 6;
+
+        let s = `<line x1="${OV.padL}" y1="${OV.bottom}" x2="${W - OV.padR}"
+                   y2="${OV.bottom}" stroke="var(--baseline)" stroke-width="1" />`;
+        for (let i = 0; i < n; i++) {
+          if (h.time[i].slice(11) !== "00:00") continue;
+          s += `<line x1="${x(i)}" y1="${OV.top}" x2="${x(i)}" y2="${OV.bottom}"
+                  stroke="var(--grid)" stroke-width="1" />`;
+          if (i + 12 < n)
+            s += `<text x="${x(i + 12)}" y="${OV.labelY}" text-anchor="middle"
+                    font-size="11" fill="var(--muted)">${new Date(
+                      h.time[i].slice(0, 10) + "T12:00",
+                    ).toLocaleDateString(undefined, { weekday: "short" })}</text>`;
+        }
+        s += `<polyline points="${temps
+          .map((v, i) => `${x(i)},${ty(v)}`)
+          .join(" ")}" fill="none" stroke="var(--temp)" stroke-width="1.5"
+            opacity="0.55" />`;
+        const ni = currentHourIndex(wxData);
+        s += `<line x1="${x(ni)}" y1="${OV.top}" x2="${x(ni)}" y2="${OV.bottom}"
+                stroke="var(--accent)" stroke-width="1" stroke-dasharray="2 3" />`;
+        const { x0, x1 } = windowRectX0(W, n);
+        s += `<rect id="winRect" x="${x0}" y="4" width="${x1 - x0}"
+                height="${OV.bottom - 4}" rx="7" fill="var(--accent)"
+                fill-opacity="0.12" stroke="var(--accent)" stroke-width="1.5" />`;
+        // grip lines: the drag affordance on the window's edges
+        for (const [id, gx] of [
+          ["winGrip1", x0 + 5],
+          ["winGrip2", x1 - 5],
+        ]) {
+          s += `<line id="${id}" x1="${gx}" y1="${gripTop}" x2="${gx}"
+                  y2="${gripTop + 12}" stroke="var(--accent)" stroke-width="2"
+                  stroke-linecap="round" opacity="0.7" />`;
+        }
+        return `<svg id="overviewSvg" viewBox="0 0 ${W} ${OV.H}" data-w="${W}"
+                  tabindex="0" role="slider" aria-label="Forecast window, 7 day timeline"
+                  aria-valuemin="0" aria-valuemax="${Math.max(0, n - WINDOW)}"
+                  aria-valuenow="${windowStart}"
+                  aria-valuetext="${rangeLabelText()}">${s}</svg>`;
+      }
+
+      // same math as windowRectX, usable before the svg exists in the DOM
+      function windowRectX0(W, n) {
+        const x = (i) => OV.padL + (i / (n - 1)) * (W - OV.padL - OV.padR);
+        return {
+          x0: x(windowStart),
+          x1: x(Math.min(windowStart + WINDOW, n - 1)),
+        };
+      }
+
+      function rangeLabelText() {
+        const t = wxData.hourly.time;
+        const end = Math.min(windowStart + WINDOW, t.length) - 1;
+        return `${timeTag(t[windowStart])} – ${timeTag(t[end])}`;
+      }
+
+      function updateOverviewWindow() {
+        const rect = document.getElementById("winRect");
+        if (rect) {
+          const { x0, x1 } = windowRectX();
+          rect.setAttribute("x", x0);
+          rect.setAttribute("width", x1 - x0);
+          for (const [id, gx] of [
+            ["winGrip1", x0 + 5],
+            ["winGrip2", x1 - 5],
+          ]) {
+            const g = document.getElementById(id);
+            if (g) {
+              g.setAttribute("x1", gx);
+              g.setAttribute("x2", gx);
+            }
+          }
+        }
+        const svg = document.getElementById("overviewSvg");
+        if (svg) {
+          svg.setAttribute("aria-valuenow", windowStart);
+          svg.setAttribute("aria-valuetext", rangeLabelText());
+        }
+        const lbl = document.getElementById("rangeLabel");
+        if (lbl) lbl.textContent = rangeLabelText();
+        const nowBtn = document.getElementById("nowBtn");
+        if (nowBtn)
+          nowBtn.style.visibility =
+            windowStart === currentHourIndex(wxData) ? "hidden" : "visible";
+      }
+
+      function setWindowStart(v) {
+        const maxStart = Math.max(0, wxData.hourly.time.length - WINDOW);
+        const next = Math.max(0, Math.min(maxStart, Math.round(v)));
+        if (next === windowStart) return;
+        windowStart = next;
+        refreshChart();
+        refreshTable();
+        updateOverviewWindow();
+      }
+
+      function attachOverviewDrag() {
+        const svg = document.getElementById("overviewSvg");
+        if (!svg) return;
+        const n = wxData.hourly.time.length;
+        let grabOffset = 0;
+        const idxAt = (clientX) => {
+          const r = svg.getBoundingClientRect();
+          return ((clientX - r.left) / r.width) * (n - 1);
+        };
+        svg.addEventListener("pointerdown", (e) => {
+          const i = idxAt(e.clientX);
+          grabOffset =
+            i >= windowStart && i <= windowStart + WINDOW
+              ? i - windowStart
+              : WINDOW / 2;
+          setWindowStart(i - grabOffset);
+          svg.setPointerCapture(e.pointerId);
+          svg.classList.add("dragging");
+          e.preventDefault();
+        });
+        svg.addEventListener("pointermove", (e) => {
+          if (svg.classList.contains("dragging"))
+            setWindowStart(idxAt(e.clientX) - grabOffset);
+        });
+        const stop = () => svg.classList.remove("dragging");
+        svg.addEventListener("pointerup", stop);
+        svg.addEventListener("pointercancel", stop);
+        svg.addEventListener("keydown", (e) => {
+          const stepH = e.shiftKey ? 24 : 3;
+          if (e.key === "ArrowLeft") setWindowStart(windowStart - stepH);
+          else if (e.key === "ArrowRight") setWindowStart(windowStart + stepH);
+          else if (e.key === "Home") setWindowStart(currentHourIndex(wxData));
+          else return;
+          e.preventDefault();
+        });
+      }
+
+      function refreshOverview() {
+        document.getElementById("overviewWrap").innerHTML =
+          renderOverviewSvg() +
+          `<div class="range-row">
+             <span class="small" id="rangeLabel">${rangeLabelText()}</span>
+             <span class="range-controls">
+               <button class="icon-btn btn-sm" id="stepBack" aria-label="Back one day">◀</button>
+               <button class="icon-btn btn-sm" id="nowBtn">Now</button>
+               <button class="icon-btn btn-sm" id="stepFwd" aria-label="Forward one day">▶</button>
+             </span>
+           </div>`;
+        attachOverviewDrag();
+        document
+          .getElementById("nowBtn")
+          .addEventListener("click", () =>
+            setWindowStart(currentHourIndex(wxData)),
+          );
+        document
+          .getElementById("stepBack")
+          .addEventListener("click", () => setWindowStart(windowStart - 24));
+        document
+          .getElementById("stepFwd")
+          .addEventListener("click", () => setWindowStart(windowStart + 24));
+        updateOverviewWindow();
+      }
+
+      function refreshHourly() {
+        refreshChips();
+        refreshChart();
+        refreshOverview();
+        refreshTable();
+        document
+          .getElementById("seriesChips")
+          .addEventListener("click", (e) => {
+            const chipEl = e.target.closest(".schip");
+            if (!chipEl) return;
+            const k = chipEl.dataset.k;
+            SERIES[k].on = !SERIES[k].on;
+            saveSeries();
+            refreshChips();
+            refreshChart();
+          });
+        const det = document.getElementById("hourlyDetails");
+        det.addEventListener("toggle", () =>
+          localStorage.setItem("wx-details-open", det.open ? "1" : "0"),
+        );
       }
 
       function renderDaily(w) {
@@ -815,17 +1251,30 @@
                 ? `${d.precipitation_probability_max[i] ?? 0}% · ${d.precipitation_sum[i]} mm`
                 : "";
             return `
-              <div class="daily-row">
+              <button class="daily-row" data-date="${date}" data-i="${i}"
+                title="Show this day in the hourly view">
                 <span>${dayLabel(date, i)}</span>
                 <span class="d-icon">${icon}</span>
                 <span class="d-cond">${escapeHtml(cond)}</span>
                 <span class="d-rain">${rain}</span>
                 <span class="d-temps">${Math.round(d.temperature_2m_max[i])}°
                   <span class="lo">/ ${Math.round(d.temperature_2m_min[i])}°</span></span>
-              </div>`;
+              </button>`;
           })
           .join("");
         return `<div class="card"><h3>7-day forecast</h3>${rows}</div>`;
+      }
+
+      function hoverLines(h) {
+        const lines = [];
+        if (SERIES.temp.on) lines.push(`${Math.round(h.temp)}°C`);
+        if (SERIES.feels.on) lines.push(`feels ${Math.round(h.feels)}°C`);
+        if (SERIES.rain.on)
+          lines.push(`rain ${h.prob ?? "–"}% (${h.precip} mm)`);
+        if (SERIES.clouds.on) lines.push(`clouds ${h.clouds}%`);
+        if (SERIES.humid.on) lines.push(`humidity ${h.humid}%`);
+        if (SERIES.wind.on) lines.push(`wind ${Math.round(h.wind)} km/h`);
+        return lines.join(" · ");
       }
 
       function attachChartHover() {
@@ -856,7 +1305,7 @@
           crosshair.setAttribute("visibility", "visible");
           tip.innerHTML = `
             <div class="t-time">${h.label} · ${escapeHtml(wmo(h.code)[1])}</div>
-            <div>${Math.round(h.temp)}°C · rain ${h.prob ?? "–"}% (${h.precip} mm)</div>`;
+            <div>${hoverLines(h)}</div>`;
           tip.style.display = "block";
           const wrapRect = wrap.getBoundingClientRect();
           const px = (cxv / scale) + rect.left - wrapRect.left;
@@ -872,8 +1321,11 @@
           tip.style.display = "none";
         }
 
-        wrap.addEventListener("mousemove", onMove);
-        wrap.addEventListener("mouseleave", onLeave);
+        // bind to the svg (recreated each render) so listeners never stack up;
+        // pointer events also give touch users tap-to-inspect
+        svg.addEventListener("pointermove", onMove);
+        svg.addEventListener("pointerdown", onMove);
+        svg.addEventListener("pointerleave", onLeave);
       }
 
       // ---------- main flow ----------
@@ -882,12 +1334,14 @@
         resultEl.innerHTML = '<p class="loading">Loading weather…</p>';
         try {
           const w = await fetchForecast(place.latitude, place.longitude);
-          hoverHours = next24Hours(w);
+          wxData = w;
+          windowStart = Math.min(
+            currentHourIndex(w),
+            Math.max(0, w.hourly.time.length - WINDOW),
+          );
           resultEl.innerHTML =
-            renderCurrent(place, w) +
-            renderHourlyCard(hoverHours) +
-            renderDaily(w);
-          attachChartHover();
+            renderCurrent(place, w) + renderHourlyCard() + renderDaily(w);
+          refreshHourly();
           localStorage.setItem("wx-last", JSON.stringify(place));
           addRecent(place);
         } catch (err) {
@@ -1065,6 +1519,35 @@
       });
 
       applyTheme(localStorage.getItem("wx-theme") || undefined);
+
+      // ---------- daily-row -> hourly window jump ----------
+
+      resultEl.addEventListener("click", (e) => {
+        const row = e.target.closest(".daily-row");
+        if (!row || !wxData) return;
+        const i = +row.dataset.i;
+        const target =
+          i === 0
+            ? currentHourIndex(wxData)
+            : wxData.hourly.time.indexOf(row.dataset.date + "T06:00");
+        if (target < 0) return;
+        setWindowStart(target);
+        document
+          .getElementById("chartWrap")
+          .scrollIntoView({ behavior: "smooth", block: "nearest" });
+      });
+
+      // re-render charts when the layout crosses the compact breakpoint
+      let resizeT;
+      addEventListener("resize", () => {
+        clearTimeout(resizeT);
+        resizeT = setTimeout(() => {
+          if (wxData && isCompact() !== compactState) {
+            refreshChart();
+            refreshOverview();
+          }
+        }, 150);
+      });
 
       // ---------- init ----------
 
