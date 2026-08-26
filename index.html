@@ -3,19 +3,75 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Simple ECMWF Weather</title>
+    <title>Weather</title>
 
     <style>
+      :root {
+        color-scheme: light;
+        --bg: #f9f9f7;
+        --surface: #fcfcfb;
+        --text: #0b0b0b;
+        --text-2: #52514e;
+        --muted: #898781;
+        --grid: #e1e0d9;
+        --baseline: #c3c2b7;
+        --border: rgba(11, 11, 11, 0.1);
+        --temp: #eb6834;
+        --rain: #2a78d6;
+        --accent: #2a78d6;
+        --accent-text: #ffffff;
+        --chip: #f0efec;
+        --error: #d03b3b;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root:not([data-theme="light"]) {
+          color-scheme: dark;
+          --bg: #0d0d0d;
+          --surface: #1a1a19;
+          --text: #ffffff;
+          --text-2: #c3c2b7;
+          --muted: #898781;
+          --grid: #2c2c2a;
+          --baseline: #383835;
+          --border: rgba(255, 255, 255, 0.1);
+          --temp: #d95926;
+          --rain: #3987e5;
+          --accent: #3987e5;
+          --accent-text: #ffffff;
+          --chip: #262624;
+          --error: #e66767;
+        }
+      }
+
+      :root[data-theme="dark"] {
+        color-scheme: dark;
+        --bg: #0d0d0d;
+        --surface: #1a1a19;
+        --text: #ffffff;
+        --text-2: #c3c2b7;
+        --muted: #898781;
+        --grid: #2c2c2a;
+        --baseline: #383835;
+        --border: rgba(255, 255, 255, 0.1);
+        --temp: #d95926;
+        --rain: #3987e5;
+        --accent: #3987e5;
+        --accent-text: #ffffff;
+        --chip: #262624;
+        --error: #e66767;
+      }
+
       * {
         box-sizing: border-box;
       }
 
       body {
-        font-family: system-ui, sans-serif;
-        background: #f4f6f8;
+        font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+        background: var(--bg);
         margin: 0;
-        padding: 30px;
-        color: #222;
+        padding: 24px 16px;
+        color: var(--text);
       }
 
       .container {
@@ -23,254 +79,1003 @@
         margin: auto;
       }
 
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 16px;
+      }
+
       h1 {
-        margin-bottom: 20px;
+        margin: 0;
+        font-size: 24px;
+      }
+
+      .icon-btn {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 8px 12px;
+        font-size: 16px;
+        cursor: pointer;
+        color: var(--text);
       }
 
       .search {
         display: flex;
-        gap: 10px;
-        margin-bottom: 20px;
+        gap: 8px;
+        margin-bottom: 10px;
+        position: relative;
+      }
+
+      .search-box {
+        flex: 1;
+        position: relative;
       }
 
       input {
-        flex: 1;
-        padding: 14px;
+        width: 100%;
+        padding: 13px 14px;
         border-radius: 10px;
-        border: 1px solid #ccc;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        color: var(--text);
         font-size: 16px;
       }
 
-      button {
-        padding: 14px 20px;
+      input:focus {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+      }
+
+      button.primary {
+        padding: 13px 18px;
         border: none;
         border-radius: 10px;
         cursor: pointer;
         font-size: 16px;
+        background: var(--accent);
+        color: var(--accent-text);
       }
 
-      .card {
-        background: white;
-        border-radius: 16px;
-        padding: 24px;
-        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+      .dropdown {
+        position: absolute;
+        top: calc(100% + 4px);
+        left: 0;
+        right: 0;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+        z-index: 10;
+        overflow: hidden;
+        display: none;
+      }
+
+      .dropdown.open {
+        display: block;
+      }
+
+      .dropdown-item {
+        padding: 11px 14px;
+        cursor: pointer;
+        font-size: 15px;
+      }
+
+      .dropdown-item .sub {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .dropdown-item:hover,
+      .dropdown-item.active {
+        background: var(--chip);
+      }
+
+      .recents {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
         margin-bottom: 20px;
       }
 
-      .main-weather {
+      .chip {
+        background: var(--chip);
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 6px 14px;
+        font-size: 14px;
+        cursor: pointer;
+        color: var(--text-2);
+      }
+
+      .chip:hover {
+        color: var(--text);
+      }
+
+      .card {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 20px 24px;
+        box-shadow: 0 2px 12px rgba(0, 0, 0, 0.06);
+        margin-bottom: 16px;
+      }
+
+      .card h3 {
+        margin: 0 0 12px;
+        font-size: 16px;
+      }
+
+      .place-row {
         display: flex;
-        gap: 30px;
+        align-items: baseline;
+        gap: 10px;
         flex-wrap: wrap;
-        margin-top: 20px;
       }
 
-      .metric {
-        min-width: 150px;
-      }
-
-      .metric h2 {
+      .place-row h2 {
         margin: 0;
-        font-size: 28px;
+        font-size: 22px;
       }
 
-      .metric p {
-        margin: 5px 0 0;
-        color: #666;
+      .now {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        margin: 14px 0 6px;
+        flex-wrap: wrap;
+      }
+
+      .now .icon {
+        font-size: 52px;
+        line-height: 1;
+      }
+
+      .now .temp {
+        font-size: 48px;
+        font-weight: 600;
+      }
+
+      .now .cond {
+        color: var(--text-2);
+        font-size: 16px;
+      }
+
+      .now .cond .feels {
+        color: var(--muted);
+        font-size: 14px;
+      }
+
+      .metrics {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+        gap: 14px;
+        margin-top: 14px;
+      }
+
+      .metric b {
+        font-size: 18px;
+        font-weight: 600;
+        display: block;
+      }
+
+      .metric span {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .small {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .legend {
+        display: flex;
+        gap: 18px;
+        margin-bottom: 6px;
+        font-size: 13px;
+        color: var(--text-2);
+        flex-wrap: wrap;
+      }
+
+      .legend .key {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+      }
+
+      .legend .swatch {
+        width: 12px;
+        height: 12px;
+        border-radius: 3px;
+        display: inline-block;
+      }
+
+      .legend .swatch.line {
+        height: 3px;
+        border-radius: 2px;
+      }
+
+      .chart-wrap {
+        position: relative;
+      }
+
+      .chart-wrap svg {
+        width: 100%;
+        height: auto;
+        display: block;
+      }
+
+      .tooltip {
+        position: absolute;
+        pointer-events: none;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        box-shadow: 0 4px 14px rgba(0, 0, 0, 0.15);
+        padding: 8px 10px;
+        font-size: 13px;
+        color: var(--text);
+        display: none;
+        white-space: nowrap;
+        z-index: 5;
+      }
+
+      .tooltip .t-time {
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      details {
+        margin-top: 14px;
+      }
+
+      summary {
+        cursor: pointer;
+        color: var(--text-2);
+        font-size: 14px;
+      }
+
+      .table-wrap {
+        overflow-x: auto;
+        margin-top: 10px;
       }
 
       table {
         width: 100%;
         border-collapse: collapse;
+        font-variant-numeric: tabular-nums;
       }
 
       th,
       td {
-        padding: 12px;
+        padding: 9px 12px;
         text-align: left;
-        border-bottom: 1px solid #eee;
+        border-bottom: 1px solid var(--grid);
+        font-size: 14px;
+        white-space: nowrap;
       }
 
       th {
-        background: #fafafa;
+        color: var(--muted);
+        font-weight: 500;
+        font-size: 13px;
       }
 
-      .small {
-        color: #666;
+      .daily-row {
+        display: grid;
+        grid-template-columns: 82px 34px 1fr auto auto;
+        align-items: center;
+        gap: 10px;
+        padding: 9px 0;
+        border-bottom: 1px solid var(--grid);
+        font-size: 15px;
+      }
+
+      .daily-row:last-child {
+        border-bottom: none;
+      }
+
+      .daily-row .d-icon {
+        font-size: 22px;
+        text-align: center;
+      }
+
+      .daily-row .d-cond {
+        color: var(--text-2);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .daily-row .d-rain {
+        color: var(--text-2);
+        font-size: 13px;
+        text-align: right;
+        min-width: 90px;
+      }
+
+      .daily-row .d-temps {
+        text-align: right;
+        min-width: 90px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .daily-row .d-temps .lo {
+        color: var(--muted);
+      }
+
+      .sun-row {
+        margin-top: 12px;
+        color: var(--text-2);
         font-size: 14px;
+        display: flex;
+        gap: 20px;
+        flex-wrap: wrap;
       }
 
       .loading {
-        color: #666;
+        color: var(--muted);
       }
 
       .error {
-        color: #d00;
+        color: var(--error);
+      }
+
+      @media (max-width: 520px) {
+        body {
+          padding: 16px 10px;
+        }
+
+        .card {
+          padding: 16px;
+        }
+
+        .now .temp {
+          font-size: 40px;
+        }
+
+        .daily-row {
+          grid-template-columns: 60px 30px auto auto;
+        }
+
+        .daily-row .d-cond {
+          display: none;
+        }
       }
     </style>
   </head>
   <body>
     <div class="container">
-      <h1>🌤 ECMWF Weather</h1>
+      <div class="topbar">
+        <h1>🌤 Weather</h1>
+        <button id="themeToggle" class="icon-btn" title="Toggle dark mode">🌙</button>
+      </div>
 
       <div class="search">
-        <input
-          id="cityInput"
-          placeholder="Enter city (e.g. Warsaw)"
-          value="Warsaw"
-        />
-        <button onclick="getWeather()">Check</button>
+        <div class="search-box">
+          <input
+            id="cityInput"
+            placeholder="Search city…"
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <div id="dropdown" class="dropdown"></div>
+        </div>
+        <button class="primary" id="searchBtn">Check</button>
+        <button class="icon-btn" id="geoBtn" title="Use my location">📍</button>
       </div>
+
+      <div id="recents" class="recents"></div>
 
       <div id="result"></div>
     </div>
 
     <script>
-      async function getWeather() {
-        console.log("🔍 Starting weather fetch...");
-        const city = document.getElementById("cityInput").value.trim();
-        const result = document.getElementById("result");
-        console.log("📍 City input:", city);
+      "use strict";
 
-        if (!city) return;
+      // ---------- constants & helpers ----------
 
-        result.innerHTML = '<p class="loading">Loading weather...</p>';
+      const GEO_URL = "https://geocoding-api.open-meteo.com/v1/search";
+      const FORECAST_URL = "https://api.open-meteo.com/v1/forecast";
 
+      // WMO weather interpretation codes -> [icon, description]
+      const WMO = {
+        0: ["☀️", "Clear sky"],
+        1: ["🌤️", "Mostly clear"],
+        2: ["⛅", "Partly cloudy"],
+        3: ["☁️", "Overcast"],
+        45: ["🌫️", "Fog"],
+        48: ["🌫️", "Rime fog"],
+        51: ["🌦️", "Light drizzle"],
+        53: ["🌦️", "Drizzle"],
+        55: ["🌧️", "Heavy drizzle"],
+        56: ["🌧️", "Freezing drizzle"],
+        57: ["🌧️", "Freezing drizzle"],
+        61: ["🌦️", "Light rain"],
+        63: ["🌧️", "Rain"],
+        65: ["🌧️", "Heavy rain"],
+        66: ["🌧️", "Freezing rain"],
+        67: ["🌧️", "Freezing rain"],
+        71: ["🌨️", "Light snow"],
+        73: ["🌨️", "Snow"],
+        75: ["❄️", "Heavy snow"],
+        77: ["🌨️", "Snow grains"],
+        80: ["🌦️", "Light showers"],
+        81: ["🌧️", "Showers"],
+        82: ["⛈️", "Heavy showers"],
+        85: ["🌨️", "Snow showers"],
+        86: ["🌨️", "Snow showers"],
+        95: ["⛈️", "Thunderstorm"],
+        96: ["⛈️", "Thunderstorm, hail"],
+        99: ["⛈️", "Thunderstorm, hail"],
+      };
+
+      function wmo(code) {
+        return WMO[code] || ["🌡️", "—"];
+      }
+
+      function escapeHtml(s) {
+        return String(s ?? "").replace(
+          /[&<>"']/g,
+          (c) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#39;",
+            })[c],
+        );
+      }
+
+      // API times are ISO strings in the *location's* timezone (timezone=auto).
+      // Never round-trip them through Date for clock labels — read the string.
+      function clockLabel(iso) {
+        return iso.slice(11, 16);
+      }
+
+      function dayLabel(dateStr, index) {
+        if (index === 0) return "Today";
+        const d = new Date(dateStr + "T12:00");
+        return d.toLocaleDateString(undefined, { weekday: "short", day: "numeric" });
+      }
+
+      function debounce(fn, ms) {
+        let t;
+        return (...args) => {
+          clearTimeout(t);
+          t = setTimeout(() => fn(...args), ms);
+        };
+      }
+
+      function placeLabel(p) {
+        return [p.name, p.admin1, p.country].filter(Boolean).join(", ");
+      }
+
+      // ---------- storage ----------
+
+      function getRecents() {
         try {
-          // 1. Geocoding
-          console.log("🌍 Fetching geocoding data for:", city);
-          const geoRes = await fetch(
-            `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1`,
-          );
-          console.log("✅ Geocoding response status:", geoRes.status);
-
-          const geoData = await geoRes.json();
-          console.log("📊 Geocoding data:", geoData);
-
-          if (!geoData.results || geoData.results.length === 0) {
-            throw new Error("City not found");
-          }
-
-          const place = geoData.results[0];
-          const lat = place.latitude;
-          const lon = place.longitude;
-          console.log("📌 Found location:", place.name, `(${lat}, ${lon})`);
-
-          // 2. ECMWF forecast
-          console.log("🌦️ Fetching weather data...");
-          const weatherUrl =
-            `https://api.open-meteo.com/v1/ecmwf` +
-            `?latitude=${lat}` +
-            `&longitude=${lon}` +
-            `&current=` +
-            `temperature_2m,wind_speed_10m,cloud_cover,precipitation_probability` +
-            `&hourly=` +
-            `temperature_2m,wind_speed_10m,precipitation_probability,cloud_cover` +
-            `&forecast_days=2` +
-            `&timezone=auto`;
-
-          const weatherRes = await fetch(weatherUrl);
-          console.log("✅ Weather response status:", weatherRes.status);
-          const weather = await weatherRes.json();
-          console.log("📊 Weather data:", weather);
-          console.log(
-            "🔑 Available keys in weather object:",
-            Object.keys(weather),
-          );
-
-          // API only has hourly data, use first hour as current
-          const current = {
-            temperature_2m: weather.hourly.temperature_2m[0],
-            wind_speed_10m: weather.hourly.wind_speed_10m[0],
-            precipitation_probability:
-              weather.hourly.precipitation_probability[0],
-            cloud_cover: weather.hourly.cloud_cover[0],
-          };
-          console.log("❓ Current object (from first hour):", current);
-
-          // first 24 hours
-          const rows = weather.hourly.time
-            .slice(0, 24)
-            .map((time, i) => {
-              return `
-                <tr>
-                    <td>${new Date(time).toLocaleTimeString([], {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}</td>
-                    <td>${weather.hourly.temperature_2m[i]}°C</td>
-                    <td>${weather.hourly.wind_speed_10m[i]} km/h</td>
-                    <td>${weather.hourly.precipitation_probability[i]}%</td>
-                    <td>${weather.hourly.cloud_cover[i]}%</td>
-                </tr>
-            `;
-            })
-            .join("");
-
-          result.innerHTML = `
-            <div class="card">
-                <h2>
-                    ${place.name}
-                    <span class="small">
-                        ${place.country}
-                    </span>
-                </h2>
-
-                <p class="small">
-                    ECMWF forecast
-                </p>
-
-                <div class="main-weather">
-                    <div class="metric">
-                        <h2>${current.temperature_2m}°C</h2>
-                        <p>Temperature</p>
-                    </div>
-
-                    <div class="metric">
-                        <h2>${current.wind_speed_10m} km/h</h2>
-                        <p>Wind</p>
-                    </div>
-
-                    <div class="metric">
-                        <h2>${current.precipitation_probability ?? 0}%</h2>
-                        <p>Rain probability</p>
-                    </div>
-
-                    <div class="metric">
-                        <h2>${current.cloud_cover}%</h2>
-                        <p>Cloud cover</p>
-                    </div>
-                </div>
-            </div>
-
-            <div class="card">
-                <h3>Next 24 hours</h3>
-
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Time</th>
-                            <th>Temp</th>
-                            <th>Wind</th>
-                            <th>Rain %</th>
-                            <th>Clouds</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        ${rows}
-                    </tbody>
-                </table>
-            </div>
-        `;
-          console.log("✨ Weather display rendered successfully");
-        } catch (err) {
-          console.error("❌ Error occurred:", err.message);
-          console.error("Full error:", err);
-          result.innerHTML = `<p class="error">Error: ${err.message}</p>`;
+          return JSON.parse(localStorage.getItem("wx-recents")) || [];
+        } catch {
+          return [];
         }
       }
 
-      // auto load Warsaw on open
-      getWeather();
+      function addRecent(place) {
+        if (!place.name || place.name === "My location") return;
+        const rest = getRecents().filter(
+          (r) => placeLabel(r) !== placeLabel(place),
+        );
+        localStorage.setItem(
+          "wx-recents",
+          JSON.stringify([place, ...rest].slice(0, 5)),
+        );
+        renderRecents();
+      }
+
+      function getLastPlace() {
+        try {
+          return JSON.parse(localStorage.getItem("wx-last"));
+        } catch {
+          return null;
+        }
+      }
+
+      // ---------- data ----------
+
+      async function geocode(query, count) {
+        const res = await fetch(
+          `${GEO_URL}?name=${encodeURIComponent(query)}&count=${count}`,
+        );
+        if (!res.ok) throw new Error("Geocoding failed");
+        const data = await res.json();
+        return data.results || [];
+      }
+
+      async function fetchForecast(lat, lon) {
+        const url =
+          `${FORECAST_URL}?latitude=${lat}&longitude=${lon}` +
+          `&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,cloud_cover,wind_speed_10m,precipitation` +
+          `&hourly=temperature_2m,apparent_temperature,precipitation_probability,precipitation,weather_code,wind_speed_10m,cloud_cover` +
+          `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,sunrise,sunset` +
+          `&forecast_days=7&timezone=auto`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("Weather request failed");
+        return res.json();
+      }
+
+      // ---------- rendering ----------
+
+      const resultEl = document.getElementById("result");
+      let hoverHours = []; // data behind the chart hover layer
+
+      function renderCurrent(place, w) {
+        const c = w.current;
+        const [icon, cond] = wmo(c.weather_code);
+        return `
+          <div class="card">
+            <div class="place-row">
+              <h2>${escapeHtml(place.name)}</h2>
+              <span class="small">${escapeHtml(
+                [place.admin1, place.country].filter(Boolean).join(", "),
+              )}</span>
+            </div>
+            <div class="now">
+              <div class="icon">${icon}</div>
+              <div class="temp">${Math.round(c.temperature_2m)}°C</div>
+              <div class="cond">
+                ${escapeHtml(cond)}<br />
+                <span class="feels">Feels like ${Math.round(
+                  c.apparent_temperature,
+                )}°C</span>
+              </div>
+            </div>
+            <div class="metrics">
+              <div class="metric"><b>${Math.round(c.wind_speed_10m)} km/h</b><span>Wind</span></div>
+              <div class="metric"><b>${c.relative_humidity_2m}%</b><span>Humidity</span></div>
+              <div class="metric"><b>${c.cloud_cover}%</b><span>Cloud cover</span></div>
+              <div class="metric"><b>${c.precipitation} mm</b><span>Precipitation</span></div>
+            </div>
+            <div class="sun-row">
+              <span>🌅 ${clockLabel(w.daily.sunrise[0])}</span>
+              <span>🌇 ${clockLabel(w.daily.sunset[0])}</span>
+            </div>
+          </div>`;
+      }
+
+      // Next 24 hours starting from the hour containing "now" (location time).
+      function next24Hours(w) {
+        const h = w.hourly;
+        let start = h.time.findIndex((t) => t > w.current.time) - 1;
+        if (start < 0) start = 0;
+        const hours = [];
+        for (let i = start; i < Math.min(start + 24, h.time.length); i++) {
+          hours.push({
+            time: h.time[i],
+            label: clockLabel(h.time[i]),
+            temp: h.temperature_2m[i],
+            wind: h.wind_speed_10m[i],
+            prob: h.precipitation_probability[i],
+            precip: h.precipitation[i],
+            clouds: h.cloud_cover[i],
+            code: h.weather_code[i],
+          });
+        }
+        return hours;
+      }
+
+      // Two stacked panels sharing one time axis: temperature line on top,
+      // rain-probability bars below (a meteogram — never a dual-axis overlay).
+      function renderChartSvg(hours) {
+        const W = 760;
+        const H = 248;
+        const padL = 38;
+        const padR = 14;
+        const innerW = W - padL - padR;
+        const step = innerW / hours.length;
+
+        const T = { top: 14, bottom: 118 }; // temperature panel
+        const P = { top: 152, bottom: 212 }; // precipitation panel
+        const labelY = 234;
+
+        const temps = hours.map((h) => h.temp);
+        const tMin = Math.floor(Math.min(...temps)) - 1;
+        const tMax = Math.ceil(Math.max(...temps)) + 1;
+        const ty = (v) =>
+          T.bottom - ((v - tMin) / (tMax - tMin)) * (T.bottom - T.top);
+        const py = (v) => P.bottom - (v / 100) * (P.bottom - P.top);
+        const cx = (i) => padL + step * (i + 0.5);
+
+        let s = "";
+
+        // temperature gridlines + clean ticks
+        const mid = Math.round((tMin + tMax) / 2);
+        for (const v of [tMin + 1, mid, tMax - 1]) {
+          s += `<line x1="${padL}" y1="${ty(v)}" x2="${W - padR}" y2="${ty(v)}"
+                  stroke="var(--grid)" stroke-width="1" />
+                <text x="${padL - 6}" y="${ty(v) + 4}" text-anchor="end"
+                  font-size="11" fill="var(--muted)">${v}°</text>`;
+        }
+
+        // temperature line
+        const pts = hours.map((h, i) => `${cx(i)},${ty(h.temp)}`).join(" ");
+        s += `<polyline points="${pts}" fill="none" stroke="var(--temp)"
+                stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />`;
+
+        // direct labels on the extremes only
+        const iMax = temps.indexOf(Math.max(...temps));
+        const iMin = temps.indexOf(Math.min(...temps));
+        for (const [i, dy] of [
+          [iMax, -8],
+          [iMin, 16],
+        ]) {
+          s += `<circle cx="${cx(i)}" cy="${ty(temps[i])}" r="4"
+                  fill="var(--temp)" stroke="var(--surface)" stroke-width="2" />
+                <text x="${cx(i)}" y="${ty(temps[i]) + dy}" text-anchor="middle"
+                  font-size="12" font-weight="600" fill="var(--text)">${Math.round(
+                    temps[i],
+                  )}°</text>`;
+        }
+
+        // precipitation panel: 100% gridline + baseline
+        s += `<line x1="${padL}" y1="${py(100)}" x2="${W - padR}" y2="${py(100)}"
+                stroke="var(--grid)" stroke-width="1" />
+              <text x="${padL - 6}" y="${py(100) + 4}" text-anchor="end"
+                font-size="11" fill="var(--muted)">100%</text>
+              <line x1="${padL}" y1="${P.bottom}" x2="${W - padR}" y2="${P.bottom}"
+                stroke="var(--baseline)" stroke-width="1" />`;
+
+        // rain-probability bars: thin, rounded data-end, square baseline
+        const barW = Math.min(16, step - 4);
+        for (let i = 0; i < hours.length; i++) {
+          const prob = hours[i].prob ?? 0;
+          if (prob <= 0) continue;
+          const x = cx(i) - barW / 2;
+          const yTop = py(prob);
+          const hgt = P.bottom - yTop;
+          const r = Math.min(4, hgt);
+          s += `<path d="M${x},${P.bottom} V${yTop + r}
+                  Q${x},${yTop} ${x + r},${yTop}
+                  H${x + barW - r}
+                  Q${x + barW},${yTop} ${x + barW},${yTop + r}
+                  V${P.bottom} Z" fill="var(--rain)" />`;
+        }
+
+        // shared hour labels every 3 hours
+        for (let i = 0; i < hours.length; i += 3) {
+          s += `<text x="${cx(i)}" y="${labelY}" text-anchor="middle"
+                  font-size="11" fill="var(--muted)">${hours[i].label}</text>`;
+        }
+
+        // crosshair (moved by the hover handler)
+        s += `<line id="crosshair" x1="0" y1="${T.top}" x2="0" y2="${P.bottom}"
+                stroke="var(--baseline)" stroke-width="1" visibility="hidden" />`;
+
+        return `<svg id="hourlyChart" viewBox="0 0 ${W} ${H}"
+                  data-padl="${padL}" data-padr="${padR}" data-w="${W}"
+                  role="img" aria-label="24 hour temperature and rain probability chart">${s}</svg>`;
+      }
+
+      function renderHourlyCard(hours) {
+        const rows = hours
+          .map(
+            (h) => `
+              <tr>
+                <td>${h.label}</td>
+                <td>${wmo(h.code)[0]}</td>
+                <td>${Math.round(h.temp)}°C</td>
+                <td>${Math.round(h.wind)} km/h</td>
+                <td>${h.prob ?? "–"}%</td>
+                <td>${h.precip} mm</td>
+                <td>${h.clouds}%</td>
+              </tr>`,
+          )
+          .join("");
+
+        return `
+          <div class="card">
+            <h3>Next 24 hours</h3>
+            <div class="legend">
+              <span class="key"><span class="swatch line" style="background:var(--temp)"></span>Temperature</span>
+              <span class="key"><span class="swatch" style="background:var(--rain)"></span>Rain chance</span>
+            </div>
+            <div class="chart-wrap" id="chartWrap">
+              ${renderChartSvg(hours)}
+              <div class="tooltip" id="chartTip"></div>
+            </div>
+            <details>
+              <summary>Hourly details</summary>
+              <div class="table-wrap">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Time</th><th></th><th>Temp</th><th>Wind</th>
+                      <th>Rain %</th><th>Rain mm</th><th>Clouds</th>
+                    </tr>
+                  </thead>
+                  <tbody>${rows}</tbody>
+                </table>
+              </div>
+            </details>
+          </div>`;
+      }
+
+      function renderDaily(w) {
+        const d = w.daily;
+        const rows = d.time
+          .map((date, i) => {
+            const [icon, cond] = wmo(d.weather_code[i]);
+            const rain =
+              (d.precipitation_probability_max[i] ?? 0) > 0 ||
+              d.precipitation_sum[i] > 0
+                ? `${d.precipitation_probability_max[i] ?? 0}% · ${d.precipitation_sum[i]} mm`
+                : "";
+            return `
+              <div class="daily-row">
+                <span>${dayLabel(date, i)}</span>
+                <span class="d-icon">${icon}</span>
+                <span class="d-cond">${escapeHtml(cond)}</span>
+                <span class="d-rain">${rain}</span>
+                <span class="d-temps">${Math.round(d.temperature_2m_max[i])}°
+                  <span class="lo">/ ${Math.round(d.temperature_2m_min[i])}°</span></span>
+              </div>`;
+          })
+          .join("");
+        return `<div class="card"><h3>7-day forecast</h3>${rows}</div>`;
+      }
+
+      function attachChartHover() {
+        const wrap = document.getElementById("chartWrap");
+        const svg = document.getElementById("hourlyChart");
+        const tip = document.getElementById("chartTip");
+        if (!wrap || !svg || !tip) return;
+        const crosshair = svg.querySelector("#crosshair");
+        const padL = +svg.dataset.padl;
+        const padR = +svg.dataset.padr;
+        const vbW = +svg.dataset.w;
+
+        function onMove(e) {
+          const rect = svg.getBoundingClientRect();
+          const scale = vbW / rect.width;
+          const vx = (e.clientX - rect.left) * scale;
+          const innerW = vbW - padL - padR;
+          const idx = Math.floor(((vx - padL) / innerW) * hoverHours.length);
+          if (idx < 0 || idx >= hoverHours.length || vx < padL) {
+            onLeave();
+            return;
+          }
+          const h = hoverHours[idx];
+          const step = innerW / hoverHours.length;
+          const cxv = padL + step * (idx + 0.5);
+          crosshair.setAttribute("x1", cxv);
+          crosshair.setAttribute("x2", cxv);
+          crosshair.setAttribute("visibility", "visible");
+          tip.innerHTML = `
+            <div class="t-time">${h.label} · ${escapeHtml(wmo(h.code)[1])}</div>
+            <div>${Math.round(h.temp)}°C · rain ${h.prob ?? "–"}% (${h.precip} mm)</div>`;
+          tip.style.display = "block";
+          const wrapRect = wrap.getBoundingClientRect();
+          const px = (cxv / scale) + rect.left - wrapRect.left;
+          const tipW = tip.offsetWidth;
+          let left = px + 12;
+          if (left + tipW > wrapRect.width) left = px - tipW - 12;
+          tip.style.left = `${Math.max(0, left)}px`;
+          tip.style.top = `20px`;
+        }
+
+        function onLeave() {
+          crosshair.setAttribute("visibility", "hidden");
+          tip.style.display = "none";
+        }
+
+        wrap.addEventListener("mousemove", onMove);
+        wrap.addEventListener("mouseleave", onLeave);
+      }
+
+      // ---------- main flow ----------
+
+      async function loadWeather(place) {
+        resultEl.innerHTML = '<p class="loading">Loading weather…</p>';
+        try {
+          const w = await fetchForecast(place.latitude, place.longitude);
+          hoverHours = next24Hours(w);
+          resultEl.innerHTML =
+            renderCurrent(place, w) +
+            renderHourlyCard(hoverHours) +
+            renderDaily(w);
+          attachChartHover();
+          localStorage.setItem("wx-last", JSON.stringify(place));
+          addRecent(place);
+        } catch (err) {
+          resultEl.innerHTML = `<p class="error">Error: ${escapeHtml(err.message)}</p>`;
+        }
+      }
+
+      async function searchAndLoad(query) {
+        if (!query) return;
+        closeDropdown();
+        resultEl.innerHTML = '<p class="loading">Searching…</p>';
+        try {
+          const results = await geocode(query, 1);
+          if (!results.length) throw new Error("City not found");
+          await loadWeather(results[0]);
+        } catch (err) {
+          resultEl.innerHTML = `<p class="error">Error: ${escapeHtml(err.message)}</p>`;
+        }
+      }
+
+      // ---------- search UI: autocomplete ----------
+
+      const input = document.getElementById("cityInput");
+      const dropdown = document.getElementById("dropdown");
+      let suggestions = [];
+      let activeIdx = -1;
+
+      function closeDropdown() {
+        dropdown.classList.remove("open");
+        dropdown.innerHTML = "";
+        suggestions = [];
+        activeIdx = -1;
+      }
+
+      function renderDropdown() {
+        if (!suggestions.length) {
+          closeDropdown();
+          return;
+        }
+        dropdown.innerHTML = suggestions
+          .map(
+            (p, i) => `
+              <div class="dropdown-item${i === activeIdx ? " active" : ""}" data-i="${i}">
+                ${escapeHtml(p.name)}
+                <span class="sub">${escapeHtml(
+                  [p.admin1, p.country].filter(Boolean).join(", "),
+                )}</span>
+              </div>`,
+          )
+          .join("");
+        dropdown.classList.add("open");
+      }
+
+      const fetchSuggestions = debounce(async () => {
+        const q = input.value.trim();
+        if (q.length < 2) {
+          closeDropdown();
+          return;
+        }
+        try {
+          suggestions = await geocode(q, 5);
+          activeIdx = -1;
+          renderDropdown();
+        } catch {
+          closeDropdown();
+        }
+      }, 300);
+
+      function pickSuggestion(i) {
+        const place = suggestions[i];
+        if (!place) return;
+        input.value = place.name;
+        closeDropdown();
+        loadWeather(place);
+      }
+
+      input.addEventListener("input", fetchSuggestions);
+
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "ArrowDown" && suggestions.length) {
+          activeIdx = (activeIdx + 1) % suggestions.length;
+          renderDropdown();
+          e.preventDefault();
+        } else if (e.key === "ArrowUp" && suggestions.length) {
+          activeIdx =
+            (activeIdx - 1 + suggestions.length) % suggestions.length;
+          renderDropdown();
+          e.preventDefault();
+        } else if (e.key === "Enter") {
+          if (activeIdx >= 0) pickSuggestion(activeIdx);
+          else searchAndLoad(input.value.trim());
+        } else if (e.key === "Escape") {
+          closeDropdown();
+        }
+      });
+
+      dropdown.addEventListener("mousedown", (e) => {
+        const item = e.target.closest(".dropdown-item");
+        if (item) pickSuggestion(+item.dataset.i);
+      });
+
+      input.addEventListener("blur", () => setTimeout(closeDropdown, 150));
+
+      document
+        .getElementById("searchBtn")
+        .addEventListener("click", () => searchAndLoad(input.value.trim()));
+
+      // ---------- geolocation ----------
+
+      document.getElementById("geoBtn").addEventListener("click", () => {
+        if (!navigator.geolocation) {
+          resultEl.innerHTML =
+            '<p class="error">Geolocation is not supported by this browser.</p>';
+          return;
+        }
+        resultEl.innerHTML = '<p class="loading">Locating…</p>';
+        navigator.geolocation.getCurrentPosition(
+          (pos) =>
+            loadWeather({
+              name: "My location",
+              latitude: pos.coords.latitude,
+              longitude: pos.coords.longitude,
+            }),
+          () => {
+            resultEl.innerHTML =
+              '<p class="error">Could not get your location.</p>';
+          },
+        );
+      });
+
+      // ---------- recents ----------
+
+      function renderRecents() {
+        const recents = getRecents();
+        document.getElementById("recents").innerHTML = recents
+          .map(
+            (p, i) =>
+              `<button class="chip" data-i="${i}">${escapeHtml(p.name)}</button>`,
+          )
+          .join("");
+      }
+
+      document.getElementById("recents").addEventListener("click", (e) => {
+        const chip = e.target.closest(".chip");
+        if (!chip) return;
+        const place = getRecents()[+chip.dataset.i];
+        if (place) {
+          input.value = place.name;
+          loadWeather(place);
+        }
+      });
+
+      // ---------- theme ----------
+
+      const themeBtn = document.getElementById("themeToggle");
+
+      function applyTheme(theme) {
+        if (theme) document.documentElement.dataset.theme = theme;
+        else delete document.documentElement.dataset.theme;
+        const dark =
+          theme === "dark" ||
+          (!theme && matchMedia("(prefers-color-scheme: dark)").matches);
+        themeBtn.textContent = dark ? "☀️" : "🌙";
+      }
+
+      themeBtn.addEventListener("click", () => {
+        const current =
+          document.documentElement.dataset.theme ||
+          (matchMedia("(prefers-color-scheme: dark)").matches
+            ? "dark"
+            : "light");
+        const next = current === "dark" ? "light" : "dark";
+        localStorage.setItem("wx-theme", next);
+        applyTheme(next);
+      });
+
+      applyTheme(localStorage.getItem("wx-theme") || undefined);
+
+      // ---------- init ----------
+
+      renderRecents();
+      const last = getLastPlace();
+      if (last && last.latitude != null) {
+        input.value = last.name === "My location" ? "" : last.name;
+        loadWeather(last);
+      } else {
+        searchAndLoad("Warsaw");
+      }
     </script>
   </body>
 </html>
