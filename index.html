@@ -506,6 +506,7 @@
       }
 
       .nowcast {
+        position: relative;
         display: flex;
         align-items: center;
         gap: 14px;
@@ -558,6 +559,18 @@
         color: var(--text-2);
         font-size: 15px;
         line-height: 1.55;
+      }
+
+      .windows {
+        margin: 10px 0 0;
+        font-size: 14px;
+        color: var(--text-2);
+      }
+
+      .day-context {
+        margin: 8px 0 0;
+        font-size: 13px;
+        color: var(--muted);
       }
 
       .agreement {
@@ -660,6 +673,7 @@
 
       .overview {
         margin-top: 4px;
+        position: relative;
       }
 
       .overview svg {
@@ -1180,6 +1194,19 @@
         return res.json();
       }
 
+      // Yesterday and last week in one small request: the deltas people
+      // actually reason in ("warmer than yesterday"), which an absolute
+      // temperature never conveys on its own.
+      async function fetchHistory(lat, lon) {
+        const url =
+          `${FORECAST_URL}?latitude=${lat}&longitude=${lon}` +
+          `&daily=temperature_2m_max,temperature_2m_min,sunrise,sunset` +
+          `&past_days=7&forecast_days=1&timezone=auto`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("History request failed");
+        return res.json();
+      }
+
       // ---------- rendering ----------
 
       const resultEl = document.getElementById("result");
@@ -1485,7 +1512,8 @@
             const h = Math.round((Math.min(s.mm, peak) / peak) * 100);
             const dry = s.mm < WET_MM;
             return `<i class="${dry ? "dry" : ""}" style="height:${dry ? 4 : Math.max(8, h)}%"
-                      title="${clockLabel(s.time)} · ${fPrecip(s.mm, true)}"></i>`;
+                      data-time="${clockLabel(s.time)}" data-mm="${s.mm}"
+                      data-prob="${s.prob}"></i>`;
           })
           .join("");
         return `
@@ -1498,8 +1526,73 @@
                 <span>${clockLabel(nc.steps[0].time)}</span>
                 <span>${clockLabel(nc.steps[nc.steps.length - 1].time)}</span>
               </div>
+              <div class="tooltip" id="ncTip"></div>
             </div>
           </div>`;
+      }
+
+      // ---------- yesterday and daylight ----------
+
+      // Clock arithmetic on the strings, never through Date: these are local
+      // times at the *location*, and a Date would read them in the browser's
+      // zone and its DST rules.
+      function minutesBetween(aIso, bIso) {
+        const mins = (iso) => +iso.slice(11, 13) * 60 + +iso.slice(14, 16);
+        return mins(bIso) - mins(aIso);
+      }
+
+      function humanDuration(mins) {
+        const m = Math.abs(Math.round(mins));
+        const h = Math.floor(m / 60);
+        return h ? `${h}h ${m % 60}m` : `${m} min`;
+      }
+
+      function contextLine(hist) {
+        const d = hist.daily;
+        const last = d.time.length - 1; // today
+        const yest = last - 1;
+        const weekAgo = 0;
+        if (yest < 0) return "";
+        const bits = [];
+
+        const dMax = d.temperature_2m_max[last] - d.temperature_2m_max[yest];
+        if (Math.abs(dMax) >= 1)
+          bits.push(
+            `${fDelta(Math.abs(dMax))} ${dMax > 0 ? "warmer" : "colder"} than yesterday`,
+          );
+        else bits.push("About the same as yesterday");
+
+        if (d.sunrise?.[weekAgo] && d.sunset?.[last]) {
+          const today = minutesBetween(d.sunrise[last], d.sunset[last]);
+          const then = minutesBetween(d.sunrise[weekAgo], d.sunset[weekAgo]);
+          const diff = today - then;
+          if (Math.abs(diff) >= 3)
+            bits.push(
+              `${humanDuration(diff)} ${diff > 0 ? "more" : "less"} daylight than a week ago`,
+            );
+        }
+        return bits.join(" · ");
+      }
+
+      function renderContext(hist) {
+        const el = document.getElementById("dayContext");
+        if (!el || !hist) return;
+        const text = contextLine(hist);
+        if (!text) return;
+        el.textContent = text + ".";
+        el.hidden = false;
+      }
+
+      let lastHistory = null; // kept so a re-render can restore the line
+
+      async function loadHistory(place) {
+        try {
+          const data = await fetchHistory(place.latitude, place.longitude);
+          lastHistory = data;
+          renderContext(data);
+        } catch {
+          /* context is a bonus, not a requirement */
+        }
       }
 
       // How many models call today's rain the same way the headline does.
@@ -1551,6 +1644,61 @@
 
       let lastAgreement = null; // kept so a re-render can restore the line
 
+      // Comfort score per hour, lower is better. Rain dominates, then how far
+      // the apparent temperature sits from a mild 15–23°, then wind.
+      function hourPenalty(w, i) {
+        const h = w.hourly;
+        const feels = h.apparent_temperature[i];
+        const prob = h.precipitation_probability[i] ?? 0;
+        const mm = h.precipitation[i] ?? 0;
+        let p = prob * 0.6 + mm * 25;
+        if (feels < 15) p += (15 - feels) * 3;
+        else if (feels > 23) p += (feels - 23) * 4;
+        p += Math.max(0, (h.wind_speed_10m[i] ?? 0) - 20) * 1.5;
+        return p;
+      }
+
+      // Best and worst three-hour stretches of remaining daylight today.
+      function outdoorWindows(w, st) {
+        const sunrise = w.daily.sunrise[0];
+        const sunset = w.daily.sunset[0];
+        const day = st.idx.filter(
+          (i) =>
+            w.hourly.time[i] >= sunrise &&
+            w.hourly.time[i] <= sunset &&
+            w.hourly.time[i] >= w.current.time,
+        );
+        const RUN = 3;
+        if (day.length < RUN + 1) return null;
+        const runs = [];
+        for (let k = 0; k + RUN <= day.length; k++) {
+          const slice = day.slice(k, k + RUN);
+          runs.push({
+            start: slice[0],
+            end: slice[RUN - 1],
+            score: slice.reduce((a, i) => a + hourPenalty(w, i), 0) / RUN,
+          });
+        }
+        runs.sort((a, b) => a.score - b.score);
+        const best = runs[0];
+        const worst = runs[runs.length - 1];
+        // A flat day has no useful "best" — saying so would be noise.
+        if (worst.score - best.score < 12) return null;
+        return { best, worst };
+      }
+
+      function renderWindows(w, st) {
+        const win = outdoorWindows(w, st);
+        if (!win) return "";
+        const span = (r) =>
+          `${clockLabel(w.hourly.time[r.start])}–${clockLabel(
+            w.hourly.time[r.end + 1] ?? w.hourly.time[r.end],
+          )}`;
+        const parts = [`<b>Best time out: ${span(win.best)}</b>`];
+        if (win.worst.score > 45) parts.push(`worst ${span(win.worst)}`);
+        return `<p class="windows">${parts.join(" · ")}</p>`;
+      }
+
       function renderToday(w) {
         const st = dayStats(w);
         const items = wearAdvice(st)
@@ -1570,6 +1718,8 @@
               </div>
             </div>
             <p class="day-summary">${escapeHtml(summaryText(w, st))}</p>
+            ${renderWindows(w, st)}
+            <p class="day-context" id="dayContext" hidden></p>
             <div class="agreement" id="agreement" hidden></div>
             <div class="wear">
               <h4>Recommended wear</h4>
@@ -1990,6 +2140,27 @@
         const stop = () => svg.classList.remove("dragging");
         svg.addEventListener("pointerup", stop);
         svg.addEventListener("pointercancel", stop);
+
+        // The strip reads as a chart, so it has to answer like one. While a
+        // drag is in progress the window rectangle is the feedback, not this.
+        const wrap = document.getElementById("overviewWrap");
+        const tip = document.getElementById("overviewTip");
+        if (wrap && tip) {
+          const hideTip = () => (tip.style.display = "none");
+          svg.addEventListener("pointermove", (e) => {
+            if (svg.classList.contains("dragging")) return hideTip();
+            const i = Math.round(idxAt(e.clientX));
+            if (i < 0 || i >= n) return hideTip();
+            const h = hourAt(wxData, i);
+            tip.innerHTML = `
+              <div class="t-time">${dayLabel(h.time.slice(0, 10), -1)} ${h.label} · ${escapeHtml(wmo(h.code)[1])}</div>
+              <div>${fTemp(h.temp, true)} · rain ${h.prob ?? "–"}% · wind ${fWind(h.wind, true)}</div>`;
+            tip.style.display = "block";
+            positionTip(wrap, tip, e.clientX, 4);
+          });
+          svg.addEventListener("pointerleave", hideTip);
+          svg.addEventListener("pointerup", hideTip);
+        }
         svg.addEventListener("keydown", (e) => {
           const stepH = e.shiftKey ? 24 : 3;
           if (e.key === "ArrowLeft") setWindowStart(windowStart - stepH);
@@ -2003,6 +2174,7 @@
       function refreshOverview() {
         document.getElementById("overviewWrap").innerHTML =
           renderOverviewSvg() +
+          '<div class="tooltip" id="overviewTip"></div>' +
           `<div class="range-row">
              <span class="small" id="rangeLabel">${rangeLabelText()}</span>
              <span class="range-controls">
@@ -2048,6 +2220,21 @@
         );
       }
 
+      // Native title text for a forecast row: the numbers the row has no room
+      // to show, not a description of what clicking does.
+      function dayDetail(d, i, cond) {
+        const bits = [
+          `${dayLabel(d.time[i], i)} · ${cond}`,
+          `${fTemp(d.temperature_2m_max[i])} / ${fTemp(d.temperature_2m_min[i], true)}`,
+          `feels ${fTemp(d.apparent_temperature_max[i])} / ${fTemp(d.apparent_temperature_min[i])}`,
+          `rain ${d.precipitation_probability_max[i] ?? 0}% · ${fPrecip(d.precipitation_sum[i], true)}`,
+          `wind ${fWind(d.wind_speed_10m_max?.[i] ?? 0, true)}`,
+        ];
+        if (d.uv_index_max?.[i] != null)
+          bits.push(`UV ${Math.round(d.uv_index_max[i])}`);
+        return bits.join(" · ") + " — tap to show this day hourly";
+      }
+
       function renderDaily(w) {
         const d = w.daily;
         const rows = d.time
@@ -2060,7 +2247,7 @@
                 : "";
             return `
               <button class="daily-row" data-date="${date}" data-i="${i}"
-                title="Show this day in the hourly view">
+                title="${escapeHtml(dayDetail(d, i, cond))}">
                 <span>${dayLabel(date, i)}</span>
                 <span class="d-icon">${icon}</span>
                 <span class="d-cond">${escapeHtml(cond)}</span>
@@ -2083,6 +2270,18 @@
         if (SERIES.humid.on) lines.push(`humidity ${h.humid}%`);
         if (SERIES.wind.on) lines.push(`wind ${fWind(h.wind, true)}`);
         return lines.join(" · ");
+      }
+
+      // Places a tooltip beside the pointer inside a positioned wrapper,
+      // flipping to the left when it would overflow the right edge.
+      function positionTip(wrap, tip, clientX, top) {
+        const wrapRect = wrap.getBoundingClientRect();
+        const px = clientX - wrapRect.left;
+        const tipW = tip.offsetWidth;
+        let left = px + 12;
+        if (left + tipW > wrapRect.width) left = px - tipW - 12;
+        tip.style.left = `${Math.max(0, left)}px`;
+        tip.style.top = `${top}px`;
       }
 
       function attachChartHover() {
@@ -2115,13 +2314,7 @@
             <div class="t-time">${h.label} · ${escapeHtml(wmo(h.code)[1])}</div>
             <div>${hoverLines(h)}</div>`;
           tip.style.display = "block";
-          const wrapRect = wrap.getBoundingClientRect();
-          const px = (cxv / scale) + rect.left - wrapRect.left;
-          const tipW = tip.offsetWidth;
-          let left = px + 12;
-          if (left + tipW > wrapRect.width) left = px - tipW - 12;
-          tip.style.left = `${Math.max(0, left)}px`;
-          tip.style.top = `20px`;
+          positionTip(wrap, tip, rect.left + cxv / scale, 20);
         }
 
         function onLeave() {
@@ -2153,6 +2346,7 @@
           renderDaily(wxData);
         refreshHourly();
         renderStatus();
+        if (lastHistory) renderContext(lastHistory);
         if (lastAgreement)
           renderAgreement(
             agreementFrom(lastAgreement.data, lastAgreement.headlineWet),
@@ -2179,7 +2373,9 @@
           addRecent(place);
           syncUrl(place);
           lastAgreement = null;
+          lastHistory = null;
           loadAgreement(place, (w.daily.precipitation_sum?.[0] ?? 0) >= 0.5);
+          loadHistory(place);
         } catch (err) {
           // A cached response served by the service worker still renders; a
           // hard failure with nothing cached is the only true error state.
@@ -2464,6 +2660,31 @@
       });
 
       applyTheme(localStorage.getItem("wx-theme") || undefined);
+
+      // ---------- nowcast bar hover ----------
+
+      // Delegated: the strip is re-rendered on every refresh and unit change.
+      resultEl.addEventListener("pointermove", (e) => {
+        const tip = document.getElementById("ncTip");
+        if (!tip) return;
+        const bar = e.target.closest(".nc-bars i");
+        const host = document.querySelector(".nowcast");
+        if (!bar || !host) {
+          tip.style.display = "none";
+          return;
+        }
+        const mm = +bar.dataset.mm;
+        tip.innerHTML = `
+          <div class="t-time">${bar.dataset.time}</div>
+          <div>${mm > 0 ? fPrecip(mm, true) : "dry"} · ${bar.dataset.prob}% chance</div>`;
+        tip.style.display = "block";
+        positionTip(host, tip, e.clientX, 4);
+      });
+
+      resultEl.addEventListener("pointerleave", () => {
+        const tip = document.getElementById("ncTip");
+        if (tip) tip.style.display = "none";
+      });
 
       // ---------- daily-row -> hourly window jump ----------
 
