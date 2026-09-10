@@ -573,6 +573,80 @@
         color: var(--muted);
       }
 
+      .aqi-row {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+
+      .aqi {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        min-width: 52px;
+        height: 52px;
+        border-radius: 12px;
+        font-size: 20px;
+        font-weight: 600;
+        color: #0b0b0b;
+      }
+
+      .aqi.good {
+        background: #7fd18a;
+      }
+
+      .aqi.fair {
+        background: #d9e07a;
+      }
+
+      .aqi.moderate {
+        background: #f0c14b;
+      }
+
+      .aqi.poor {
+        background: #ec8b5e;
+      }
+
+      .aqi.severe {
+        background: #d95f6b;
+        color: #ffffff;
+      }
+
+      .pollen-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        margin-top: 12px;
+      }
+
+      .pollen {
+        padding: 6px 12px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--chip);
+        font-size: 13px;
+        color: var(--text-2);
+      }
+
+      .pollen.moderate {
+        border-color: color-mix(in srgb, #f0c14b 60%, transparent);
+      }
+
+      .pollen.high {
+        border-color: color-mix(in srgb, #d95f6b 60%, transparent);
+        color: var(--text);
+      }
+
+      .scorecard {
+        margin: 10px 0 0;
+        padding: 10px 12px;
+        border-radius: 10px;
+        background: var(--chip);
+        font-size: 13px;
+        color: var(--text-2);
+        line-height: 1.5;
+      }
+
       .agreement {
         margin-top: 12px;
         font-size: 13px;
@@ -977,6 +1051,7 @@
 
       const GEO_URL = "https://geocoding-api.open-meteo.com/v1/search";
       const FORECAST_URL = "https://api.open-meteo.com/v1/forecast";
+      const AIR_URL = "https://air-quality-api.open-meteo.com/v1/air-quality";
 
       // WMO weather interpretation codes -> [icon, description]
       const WMO = {
@@ -1200,10 +1275,30 @@
       async function fetchHistory(lat, lon) {
         const url =
           `${FORECAST_URL}?latitude=${lat}&longitude=${lon}` +
-          `&daily=temperature_2m_max,temperature_2m_min,sunrise,sunset` +
+          `&daily=temperature_2m_max,temperature_2m_min,precipitation_sum,sunrise,sunset` +
           `&past_days=7&forecast_days=1&timezone=auto`;
         const res = await fetch(url);
         if (!res.ok) throw new Error("History request failed");
+        return res.json();
+      }
+
+      const POLLENS = [
+        ["alder_pollen", "Alder"],
+        ["birch_pollen", "Birch"],
+        ["grass_pollen", "Grass"],
+        ["mugwort_pollen", "Mugwort"],
+        ["olive_pollen", "Olive"],
+        ["ragweed_pollen", "Ragweed"],
+      ];
+
+      async function fetchAir(lat, lon) {
+        const url =
+          `${AIR_URL}?latitude=${lat}&longitude=${lon}` +
+          `&current=european_aqi,pm2_5,pm10,ozone,nitrogen_dioxide,` +
+          POLLENS.map((p) => p[0]).join(",") +
+          `&timezone=auto`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("Air quality request failed");
         return res.json();
       }
 
@@ -1531,6 +1626,199 @@
           </div>`;
       }
 
+      // ---------- air quality & pollen ----------
+
+      // European AQI bands, as published: the number alone means nothing to
+      // most people, the word does.
+      function aqiBand(v) {
+        if (v == null) return null;
+        if (v <= 20) return ["Good", "good"];
+        if (v <= 40) return ["Fair", "fair"];
+        if (v <= 60) return ["Moderate", "moderate"];
+        if (v <= 80) return ["Poor", "poor"];
+        if (v <= 100) return ["Very poor", "poor"];
+        return ["Extremely poor", "severe"];
+      }
+
+      function pollenBand(v) {
+        if (v == null || v < 1) return null;
+        if (v < 10) return "low";
+        if (v < 50) return "moderate";
+        return "high";
+      }
+
+      function renderAir(air) {
+        const c = air?.current;
+        if (!c) return "";
+        const aqi = c.european_aqi;
+        const band = aqiBand(aqi);
+        const pollens = POLLENS.map(([key, label]) => [label, pollenBand(c[key])])
+          .filter(([, b]) => b);
+
+        // Clean air with nothing in the air to react to is not news.
+        if ((!band || aqi <= 40) && !pollens.length) return "";
+
+        const worst = [
+          ["PM2.5", c.pm2_5],
+          ["PM10", c.pm10],
+          ["Ozone", c.ozone],
+          ["NO₂", c.nitrogen_dioxide],
+        ]
+          .filter(([, v]) => v != null)
+          .sort((a, b) => b[1] - a[1])[0];
+
+        const chips = pollens
+          .map(
+            ([label, b]) =>
+              `<span class="pollen ${b}">${label} pollen ${b}</span>`,
+          )
+          .join("");
+
+        return `
+          <div class="card">
+            <h3>Air quality</h3>
+            ${
+              band
+                ? `<div class="aqi-row">
+                     <span class="aqi ${band[1]}">${Math.round(aqi)}</span>
+                     <div>
+                       <b>${band[0]}</b>
+                       ${worst ? `<div class="small">Highest reading: ${escapeHtml(worst[0])} at ${Math.round(worst[1])} µg/m³</div>` : ""}
+                     </div>
+                   </div>`
+                : ""
+            }
+            ${chips ? `<div class="pollen-row">${chips}</div>` : ""}
+          </div>`;
+      }
+
+      let lastAir = null;
+
+      async function loadAir(place) {
+        try {
+          lastAir = await fetchAir(place.latitude, place.longitude);
+          const host = document.getElementById("airSlot");
+          if (host) host.innerHTML = renderAir(lastAir);
+        } catch {
+          /* air quality is a bonus, not a requirement */
+        }
+      }
+
+      // ---------- accuracy scorecard ----------
+
+      // Every load records what today's forecast claimed. Tomorrow's history
+      // request grades it. Nobody else shows this because nobody else wants to
+      // be graded — which is exactly why it earns trust.
+      const LOG_KEY = "wx-forecast-log";
+      const LOG_DAYS = 14;
+
+      function placeKey(p) {
+        return `${(+p.latitude).toFixed(2)},${(+p.longitude).toFixed(2)}`;
+      }
+
+      function readLog() {
+        try {
+          return JSON.parse(localStorage.getItem(LOG_KEY)) || {};
+        } catch {
+          return {};
+        }
+      }
+
+      function logForecast(place, w, st) {
+        const log = readLog();
+        const cutoff = new Date(Date.now() - LOG_DAYS * 86400000)
+          .toISOString()
+          .slice(0, 10);
+        for (const k of Object.keys(log))
+          if ((log[k].date || "") < cutoff) delete log[k];
+        log[`${placeKey(place)}|${st.date}`] = {
+          date: st.date,
+          hi: st.hi,
+          lo: st.lo,
+          prob: st.prob,
+          rain: st.sum >= 0.5 || st.prob >= 50,
+        };
+        try {
+          localStorage.setItem(LOG_KEY, JSON.stringify(log));
+        } catch {
+          /* private mode, or storage full — grading is optional */
+        }
+      }
+
+      // Grades every logged day this history response can settle.
+      function gradeForecasts(place, hist) {
+        const d = hist.daily;
+        if (!d?.time) return null;
+        const log = readLog();
+        const today = d.time[d.time.length - 1];
+        const graded = [];
+        for (let i = 0; i < d.time.length; i++) {
+          const date = d.time[i];
+          if (date >= today) continue; // today isn't over yet
+          const entry = log[`${placeKey(place)}|${date}`];
+          if (!entry) continue;
+          const actualHi = d.temperature_2m_max[i];
+          const actualRain = (d.precipitation_sum[i] ?? 0) >= 0.5;
+          if (actualHi == null) continue;
+          graded.push({
+            date,
+            saidHi: entry.hi,
+            actualHi,
+            err: Math.abs(actualHi - entry.hi),
+            saidRain: entry.rain,
+            prob: entry.prob ?? 0,
+            actualRain,
+            rainRight: entry.rain === actualRain,
+          });
+        }
+        return graded.length ? graded : null;
+      }
+
+      // A 40% call that stayed dry was not a wrong forecast, so it is not
+      // reported as a miss.
+      function rainVerdict(g) {
+        if (g.rainRight) return "rain called right";
+        if (g.saidRain && !g.actualRain)
+          return g.prob < 60
+            ? `rain was a ${g.prob}% call and it stayed dry`
+            : "we called rain and it stayed dry";
+        return "rain arrived that we did not call";
+      }
+
+      function scoreText(graded) {
+        const last = graded[graded.length - 1];
+        const yesterday = new Date(Date.now() - 86400000)
+          .toISOString()
+          .slice(0, 10);
+        const when =
+          last.date === yesterday
+            ? "Yesterday"
+            : new Date(last.date + "T12:00").toLocaleDateString(undefined, {
+                weekday: "long",
+              });
+        const lines = [
+          `${when} we said ${fTemp(last.saidHi)}, it reached ${fTemp(last.actualHi, true)} — ${rainVerdict(last)}.`,
+        ];
+        if (graded.length >= 3) {
+          const avg =
+            graded.reduce((a, g) => a + g.err, 0) / graded.length;
+          const right = graded.filter((g) => g.rainRight).length;
+          lines.push(
+            `Last ${graded.length} days: highs within ${fDelta(avg)} on average, rain right ${right} of ${graded.length}.`,
+          );
+        }
+        return lines.join(" ");
+      }
+
+      function renderScore(place, hist) {
+        const el = document.getElementById("scorecard");
+        if (!el || !place || !hist) return;
+        const graded = gradeForecasts(place, hist);
+        if (!graded) return;
+        el.textContent = scoreText(graded);
+        el.hidden = false;
+      }
+
       // ---------- yesterday and daylight ----------
 
       // Clock arithmetic on the strings, never through Date: these are local
@@ -1584,12 +1872,15 @@
       }
 
       let lastHistory = null; // kept so a re-render can restore the line
+      let lastHistoryPlace = null;
 
       async function loadHistory(place) {
+        lastHistoryPlace = place;
         try {
           const data = await fetchHistory(place.latitude, place.longitude);
           lastHistory = data;
           renderContext(data);
+          renderScore(place, data);
         } catch {
           /* context is a bonus, not a requirement */
         }
@@ -1720,6 +2011,7 @@
             <p class="day-summary">${escapeHtml(summaryText(w, st))}</p>
             ${renderWindows(w, st)}
             <p class="day-context" id="dayContext" hidden></p>
+            <p class="scorecard" id="scorecard" hidden></p>
             <div class="agreement" id="agreement" hidden></div>
             <div class="wear">
               <h4>Recommended wear</h4>
@@ -2343,10 +2635,14 @@
           renderNowcast(wxData) +
           renderToday(wxData) +
           renderHourlyCard() +
-          renderDaily(wxData);
+          renderDaily(wxData) +
+          `<div id="airSlot">${lastAir ? renderAir(lastAir) : ""}</div>`;
         refreshHourly();
         renderStatus();
-        if (lastHistory) renderContext(lastHistory);
+        if (lastHistory) {
+          renderContext(lastHistory);
+          renderScore(lastHistoryPlace, lastHistory);
+        }
         if (lastAgreement)
           renderAgreement(
             agreementFrom(lastAgreement.data, lastAgreement.headlineWet),
@@ -2374,8 +2670,11 @@
           syncUrl(place);
           lastAgreement = null;
           lastHistory = null;
+          logForecast(place, w, dayStats(w));
           loadAgreement(place, (w.daily.precipitation_sum?.[0] ?? 0) >= 0.5);
           loadHistory(place);
+          lastAir = null;
+          loadAir(place);
         } catch (err) {
           // A cached response served by the service worker still renders; a
           // hard failure with nothing cached is the only true error state.
