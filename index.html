@@ -289,6 +289,80 @@
         font-size: 13px;
       }
 
+      .today-top {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
+        flex-wrap: wrap;
+      }
+
+      .hilo {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .hilo .hi {
+        font-size: 30px;
+        font-weight: 600;
+      }
+
+      .hilo .lo {
+        font-size: 22px;
+        color: var(--muted);
+      }
+
+      .hilo .hilo-label {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .day-summary {
+        margin: 12px 0 0;
+        color: var(--text-2);
+        font-size: 15px;
+        line-height: 1.55;
+      }
+
+      .wear {
+        margin-top: 14px;
+        border-top: 1px solid var(--grid);
+        padding-top: 12px;
+      }
+
+      .wear h4 {
+        margin: 0 0 9px;
+        font-size: 13px;
+        font-weight: 500;
+        color: var(--muted);
+      }
+
+      .wear-items {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .wear-item {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        padding: 6px 12px;
+        border-radius: 999px;
+        border: 1px solid var(--border);
+        background: var(--chip);
+        color: var(--text-2);
+        font-size: 13px;
+      }
+
+      @media (max-width: 520px) {
+        .hilo .hi {
+          font-size: 26px;
+        }
+      }
+
       .series-chips {
         display: flex;
         flex-wrap: wrap;
@@ -688,7 +762,7 @@
           `${FORECAST_URL}?latitude=${lat}&longitude=${lon}` +
           `&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,cloud_cover,wind_speed_10m,precipitation` +
           `&hourly=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation_probability,precipitation,weather_code,wind_speed_10m,cloud_cover` +
-          `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,precipitation_sum,sunrise,sunset` +
+          `&daily=weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,precipitation_probability_max,precipitation_sum,wind_speed_10m_max,uv_index_max,sunrise,sunset` +
           `&forecast_days=7&timezone=auto`;
         const res = await fetch(url);
         if (!res.ok) throw new Error("Weather request failed");
@@ -766,6 +840,169 @@
             <div class="sun-row">
               <span title="Sunrise" aria-label="Sunrise ${clockLabel(w.daily.sunrise[0])}">🌅 ${clockLabel(w.daily.sunrise[0])}</span>
               <span title="Sunset" aria-label="Sunset ${clockLabel(w.daily.sunset[0])}">🌇 ${clockLabel(w.daily.sunset[0])}</span>
+            </div>
+          </div>`;
+      }
+
+      // ---------- today's summary ----------
+
+      // Hourly indices belonging to one calendar date (location time).
+      function dayIndices(w, dateStr) {
+        const out = [];
+        const t = w.hourly.time;
+        for (let i = 0; i < t.length; i++)
+          if (t[i].slice(0, 10) === dateStr) out.push(i);
+        return out;
+      }
+
+      // Rain hours are reported as contiguous runs so the text stays readable.
+      function rainRuns(w, idx, minProb) {
+        const runs = [];
+        let start = -1;
+        for (const i of idx) {
+          const wet = (w.hourly.precipitation_probability[i] ?? 0) >= minProb;
+          if (wet && start < 0) start = i;
+          if (!wet && start >= 0) {
+            runs.push([start, i]);
+            start = -1;
+          }
+        }
+        if (start >= 0) runs.push([start, idx[idx.length - 1] + 1]);
+        return runs;
+      }
+
+      function dayStats(w) {
+        const d = w.daily;
+        const date = d.time[0];
+        const idx = dayIndices(w, date);
+        const now = currentHourIndex(w);
+        const rest = idx.filter((i) => i >= now);
+        const h = w.hourly;
+        const pick = rest.length ? rest : idx;
+        let warmest = pick[0];
+        for (const i of pick)
+          if (h.temperature_2m[i] > h.temperature_2m[warmest]) warmest = i;
+        const windMax = idx.reduce(
+          (m, i) => Math.max(m, h.wind_speed_10m[i] ?? 0),
+          0,
+        );
+        return {
+          date,
+          idx,
+          rest,
+          hi: d.temperature_2m_max[0],
+          lo: d.temperature_2m_min[0],
+          feelsHi: d.apparent_temperature_max[0],
+          feelsLo: d.apparent_temperature_min[0],
+          code: d.weather_code[0],
+          prob: d.precipitation_probability_max[0] ?? 0,
+          sum: d.precipitation_sum[0] ?? 0,
+          wind: d.wind_speed_10m_max?.[0] ?? windMax,
+          uv: d.uv_index_max?.[0],
+          warmestHour: h.time[warmest],
+          rain: rainRuns(w, rest.length ? rest : idx, 40),
+        };
+      }
+
+      const SNOW_CODES = [71, 73, 75, 77, 85, 86];
+
+      function precipWord(code) {
+        if (SNOW_CODES.includes(code)) return "Snow";
+        if (code >= 95) return "Storms";
+        return "Rain";
+      }
+
+      function summaryText(w, st) {
+        const cond = wmo(st.code)[1].toLowerCase();
+        const parts = [];
+        parts.push(
+          `${cond === "—" ? "Mixed conditions" : cond.charAt(0).toUpperCase() + cond.slice(1)} today, ` +
+            `${Math.round(st.lo)}° to ${Math.round(st.hi)}°C, warmest around ${clockLabel(st.warmestHour)}.`,
+        );
+
+        if (Math.round(st.feelsHi) !== Math.round(st.hi))
+          parts.push(`Feels closer to ${Math.round(st.feelsHi)}° at its peak.`);
+
+        if (st.rain.length) {
+          const windows = st.rain
+            .slice(0, 2)
+            .map(
+              ([a, b]) =>
+                `${clockLabel(w.hourly.time[a])}–${clockLabel(w.hourly.time[b] ?? w.hourly.time[b - 1])}`,
+            )
+            .join(" and ");
+          parts.push(
+            `${precipWord(st.code)} most likely ${windows} (${st.prob}% peak, ${st.sum} mm total).`,
+          );
+        } else if (st.prob >= 20) {
+          parts.push(`Showers possible but unlikely (${st.prob}% peak).`);
+        } else {
+          parts.push("Little to no rain expected.");
+        }
+
+        if (st.wind >= 45) parts.push(`Strong wind, gusting to ${Math.round(st.wind)} km/h.`);
+        else if (st.wind >= 25) parts.push(`Breezy, up to ${Math.round(st.wind)} km/h.`);
+
+        if (st.uv >= 8) parts.push(`UV index peaks very high at ${Math.round(st.uv)}.`);
+        else if (st.uv >= 6) parts.push(`UV index peaks high at ${Math.round(st.uv)}.`);
+
+        parts.push(`Sun sets ${clockLabel(w.daily.sunset[0])}.`);
+        return parts.join(" ");
+      }
+
+      // Advice keys off apparent temperature: what the day feels like beats
+      // what the thermometer reads.
+      function wearAdvice(st) {
+        const hi = st.feelsHi;
+        const lo = st.feelsLo;
+        const items = [];
+
+        if (hi <= 0) items.push(["🧥", "Heavy winter coat"]);
+        else if (hi <= 8) items.push(["🧥", "Warm coat"]);
+        else if (hi <= 15) items.push(["🧥", "Light jacket"]);
+        else if (hi <= 22) items.push(["👕", "Long sleeves"]);
+        else items.push(["👕", "T-shirt"]);
+
+        if (hi >= 24) items.push(["🩳", "Shorts weather"]);
+        if (hi - lo >= 9 && hi > 12) items.push(["🧅", "Layers — big day swing"]);
+        if (lo <= 3) items.push(["🧤", "Gloves and hat"]);
+        else if (lo <= 9 && hi >= 16) items.push(["🧣", "Something for the evening"]);
+
+        const snowing = SNOW_CODES.includes(st.code);
+        if (snowing) items.push(["❄️", "Snow-ready outer layer"]);
+        else if (st.prob >= 60 || st.sum >= 3) items.push(["☔", "Umbrella"]);
+        else if (st.prob >= 30) items.push(["🧢", "Rain shell, just in case"]);
+        if (st.sum >= 8 || snowing) items.push(["🥾", "Waterproof shoes"]);
+
+        if (st.wind >= 45) items.push(["🌬️", "Windproof outer layer"]);
+        if (st.uv >= 6) items.push(["🕶️", "Sunglasses and sunscreen"]);
+        if (snowing) items.push(["🦶", "Grip underfoot"]);
+
+        return items;
+      }
+
+      function renderToday(w) {
+        const st = dayStats(w);
+        const items = wearAdvice(st)
+          .map(
+            ([icon, text]) =>
+              `<span class="wear-item">${icon} ${escapeHtml(text)}</span>`,
+          )
+          .join("");
+        return `
+          <div class="card">
+            <div class="today-top">
+              <h3 style="margin:0">Today</h3>
+              <div class="hilo">
+                <span class="hilo-label">High / low</span>
+                <span class="hi">${Math.round(st.hi)}°</span>
+                <span class="lo">/ ${Math.round(st.lo)}°</span>
+              </div>
+            </div>
+            <p class="day-summary">${escapeHtml(summaryText(w, st))}</p>
+            <div class="wear">
+              <h4>Recommended wear</h4>
+              <div class="wear-items">${items}</div>
             </div>
           </div>`;
       }
@@ -1340,7 +1577,10 @@
             Math.max(0, w.hourly.time.length - WINDOW),
           );
           resultEl.innerHTML =
-            renderCurrent(place, w) + renderHourlyCard() + renderDaily(w);
+            renderCurrent(place, w) +
+            renderToday(w) +
+            renderHourlyCard() +
+            renderDaily(w);
           refreshHourly();
           localStorage.setItem("wx-last", JSON.stringify(place));
           addRecent(place);
