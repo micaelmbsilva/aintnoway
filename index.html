@@ -226,6 +226,12 @@
         color: var(--text);
       }
 
+      .chip.active {
+        border-color: var(--accent);
+        color: var(--text);
+        background: color-mix(in srgb, var(--accent) 14%, transparent);
+      }
+
       .card {
         background: var(--surface);
         border: 1px solid var(--border);
@@ -339,6 +345,18 @@
 
       .banner.show {
         display: flex;
+      }
+
+      .banner.alert {
+        background: color-mix(in srgb, #d95f6b 16%, transparent);
+        border-color: color-mix(in srgb, #d95f6b 50%, transparent);
+        color: var(--text);
+        font-weight: 500;
+      }
+
+      .banner.alert.severe {
+        background: color-mix(in srgb, #d95f6b 30%, transparent);
+        border-color: #d95f6b;
       }
 
       .banner.offline {
@@ -962,6 +980,7 @@
         <h1>🌤 Weather</h1>
         <div class="topbar-actions">
           <button id="shareBtn" class="icon-btn" title="Share this forecast" aria-label="Share this forecast">🔗</button>
+          <button id="cardBtn" class="icon-btn" title="Share as an image" aria-label="Share as an image">🖼️</button>
           <button id="settingsBtn" class="icon-btn" title="Units and display" aria-label="Units and display" aria-haspopup="dialog">⚙️</button>
           <button id="themeToggle" class="icon-btn" title="Toggle dark mode" aria-label="Toggle dark mode">🌙</button>
         </div>
@@ -982,6 +1001,8 @@
       </div>
 
       <div id="recents" class="recents"></div>
+
+      <div id="alertBanner" class="banner alert" role="alert"></div>
 
       <div id="offlineBanner" class="banner offline" role="status">
         <span class="grow" id="offlineText">Offline — showing the last forecast.</span>
@@ -1299,6 +1320,30 @@
           `&timezone=auto`;
         const res = await fetch(url);
         if (!res.ok) throw new Error("Air quality request failed");
+        return res.json();
+      }
+
+      // National Weather Service: free, keyless, CORS-open, US-only. Europe's
+      // MeteoAlarm publishes no CORS headers, so it needs a proxy this site
+      // does not have — non-US locations simply show no alerts.
+      const ALERT_URL = "https://api.weather.gov/alerts/active";
+
+      function inUnitedStates(lat, lon) {
+        const boxes = [
+          [24.5, -125, 49.4, -66.9], // contiguous
+          [51, -170, 71.5, -129], // Alaska
+          [18.9, -160.3, 22.3, -154.8], // Hawaii
+          [17.9, -67.3, 18.6, -65.2], // Puerto Rico
+        ];
+        return boxes.some(
+          ([s, w, n, e]) => lat >= s && lat <= n && lon >= w && lon <= e,
+        );
+      }
+
+      async function fetchAlerts(lat, lon) {
+        const url = `${ALERT_URL}?point=${lat.toFixed(4)},${lon.toFixed(4)}`;
+        const res = await fetch(url, { headers: { Accept: "application/geo+json" } });
+        if (!res.ok) throw new Error("Alert request failed");
         return res.json();
       }
 
@@ -1690,6 +1735,47 @@
             }
             ${chips ? `<div class="pollen-row">${chips}</div>` : ""}
           </div>`;
+      }
+
+      // Alert text is written by the issuing office, not by this page: it is
+      // rendered as text, never as markup.
+      function renderAlerts(data) {
+        const el = document.getElementById("alertBanner");
+        if (!el) return;
+        const list = (data?.features || [])
+          .map((f) => f.properties)
+          .filter((p) => p && p.event)
+          .sort((a, b) => severityRank(b.severity) - severityRank(a.severity));
+        if (!list.length) {
+          el.classList.remove("show");
+          return;
+        }
+        const top = list[0];
+        el.className = `banner alert show ${severityRank(top.severity) >= 3 ? "severe" : ""}`;
+        el.textContent = "";
+        const span = document.createElement("span");
+        span.className = "grow";
+        span.textContent =
+          list.length > 1
+            ? `${top.event} — ${top.headline || ""} (+${list.length - 1} more)`
+            : `${top.event} — ${top.headline || ""}`;
+        el.append(span);
+      }
+
+      function severityRank(s) {
+        return { Extreme: 4, Severe: 3, Moderate: 2, Minor: 1 }[s] || 0;
+      }
+
+      async function loadAlerts(place) {
+        if (!inUnitedStates(+place.latitude, +place.longitude)) {
+          document.getElementById("alertBanner")?.classList.remove("show");
+          return;
+        }
+        try {
+          renderAlerts(await fetchAlerts(+place.latitude, +place.longitude));
+        } catch {
+          /* alerts are best-effort */
+        }
       }
 
       let lastAir = null;
@@ -2667,6 +2753,7 @@
           renderAll();
           localStorage.setItem("wx-last", JSON.stringify(place));
           addRecent(place);
+          renderRecents();
           syncUrl(place);
           lastAgreement = null;
           lastHistory = null;
@@ -2675,6 +2762,7 @@
           loadHistory(place);
           lastAir = null;
           loadAir(place);
+          loadAlerts(place);
         } catch (err) {
           // A cached response served by the service worker still renders; a
           // hard failure with nothing cached is the only true error state.
@@ -2766,6 +2854,153 @@
           longitude: lon,
         };
       }
+
+      // Draws the day as a square image. A shared link is a link; a shared
+      // card is content, and content is the only organic reach a site has.
+      function drawShareCard(place, w) {
+        const st = dayStats(w);
+        const S = 1080;
+        const cv = document.createElement("canvas");
+        cv.width = S;
+        cv.height = S;
+        const g = cv.getContext("2d");
+        const css = getComputedStyle(document.body);
+        const ink = css.getPropertyValue("--text").trim() || "#0b0b0b";
+        const ink2 = css.getPropertyValue("--text-2").trim() || "#52514e";
+        const muted = css.getPropertyValue("--muted").trim() || "#898781";
+
+        g.fillStyle = css.getPropertyValue("--surface").trim() || "#fff";
+        g.fillRect(0, 0, S, S);
+
+        const pad = 88;
+        g.fillStyle = ink;
+        g.font = "600 62px system-ui, -apple-system, sans-serif";
+        g.fillText(place.name, pad, 170);
+
+        g.fillStyle = muted;
+        g.font = "34px system-ui, -apple-system, sans-serif";
+        g.fillText(wmo(st.code)[1], pad, 226);
+
+        g.fillStyle = ink;
+        g.font = "600 210px system-ui, -apple-system, sans-serif";
+        g.fillText(fTemp(w.current.temperature_2m, true), pad, 430);
+
+        g.fillStyle = ink2;
+        g.font = "46px system-ui, -apple-system, sans-serif";
+        g.fillText(
+          `${fTemp(st.hi)} / ${fTemp(st.lo)} today`,
+          pad,
+          510,
+        );
+
+        // Canvas has no text layout, so wrap by hand — and drop whole
+        // sentences rather than cutting one mid-word.
+        g.font = "38px system-ui, -apple-system, sans-serif";
+        g.fillStyle = ink2;
+        const wrap = (text) => {
+          const out = [];
+          let line = "";
+          for (const word of text.split(" ")) {
+            const test = line ? `${line} ${word}` : word;
+            if (g.measureText(test).width > S - pad * 2) {
+              out.push(line);
+              line = word;
+            } else line = test;
+          }
+          if (line) out.push(line);
+          return out;
+        };
+
+        const MAX_LINES = 4;
+        // Split after a full stop followed by space — never inside "4.2 mm".
+        const sentences = summaryText(w, st)
+          .split(/(?<=\.)\s+/)
+          .map((t) => t + " ");
+        let kept = "";
+        for (const sentence of sentences) {
+          const candidate = (kept + sentence).trim();
+          if (wrap(candidate).length > MAX_LINES) break;
+          kept = candidate + " ";
+        }
+        const lines = wrap((kept || sentences[0] || "").trim()).slice(0, MAX_LINES);
+        let y = 610;
+        for (const l of lines) {
+          g.fillText(l, pad, y);
+          y += 54;
+        }
+        y -= 54;
+
+        // Wear advice as pills: the part of the card worth screenshotting.
+        let px = pad;
+        let py = Math.min(y + 90, 830);
+        g.font = "34px system-ui, -apple-system, sans-serif";
+        for (const [, text] of wearAdvice(st)) {
+          const wpx = g.measureText(text).width + 44;
+          if (px + wpx > S - pad) {
+            px = pad;
+            py += 74;
+          }
+          if (py > S - 148) break;
+          g.fillStyle = css.getPropertyValue("--chip").trim() || "#f0efec";
+          g.beginPath();
+          g.roundRect(px, py - 44, wpx, 62, 31);
+          g.fill();
+          g.fillStyle = ink2;
+          g.fillText(text, px + 22, py);
+          px += wpx + 14;
+        }
+
+        g.strokeStyle = css.getPropertyValue("--grid").trim() || "#e1e0d9";
+        g.lineWidth = 2;
+        g.beginPath();
+        g.moveTo(pad, S - 116);
+        g.lineTo(S - pad, S - 116);
+        g.stroke();
+
+        g.fillStyle = muted;
+        g.font = "30px system-ui, -apple-system, sans-serif";
+        g.fillText(
+          `${location.host || "weather"} · updated ${clockLabel(w.current.time)}`,
+          pad,
+          S - 58,
+        );
+        return cv;
+      }
+
+      function canvasBlob(cv) {
+        return new Promise((r) => cv.toBlob(r, "image/png"));
+      }
+
+      async function shareCard() {
+        if (!currentPlace || !wxData) return false;
+        try {
+          const blob = await canvasBlob(drawShareCard(currentPlace, wxData));
+          if (!blob) return false;
+          const file = new File([blob], "weather.png", { type: "image/png" });
+          if (navigator.canShare?.({ files: [file] })) {
+            await navigator.share({
+              files: [file],
+              text: `Weather in ${currentPlace.name}`,
+              url: location.href,
+            });
+            return true;
+          }
+          // No file sharing: hand the image over as a download instead.
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = `weather-${currentPlace.name.toLowerCase().replace(/\s+/g, "-")}.png`;
+          a.click();
+          setTimeout(() => URL.revokeObjectURL(url), 4000);
+          toast("Card saved");
+          return true;
+        } catch (err) {
+          // AbortError means the user dismissed the sheet — nothing to recover.
+          return err?.name === "AbortError";
+        }
+      }
+
+      document.getElementById("cardBtn").addEventListener("click", shareCard);
 
       document.getElementById("shareBtn").addEventListener("click", async () => {
         const url = location.href;
@@ -2916,12 +3151,44 @@
 
       function renderRecents() {
         const recents = getRecents();
+        const here = currentPlace ? placeKey(currentPlace) : null;
         document.getElementById("recents").innerHTML = recents
           .map(
             (p, i) =>
-              `<button class="chip" data-i="${i}">${escapeHtml(p.name)}</button>`,
+              `<button class="chip${placeKey(p) === here ? " active" : ""}"
+                 data-i="${i}">${escapeHtml(p.name)}</button>`,
           )
           .join("");
+      }
+
+      // Swipe between saved places, the gesture a phone user already expects
+      // from a multi-location weather app.
+      function attachPlaceSwipe() {
+        let x0 = null;
+        let y0 = null;
+        resultEl.addEventListener("pointerdown", (e) => {
+          // The chart and the timeline own their own horizontal drags.
+          if (e.target.closest("svg, .table-wrap, .nc-bars")) return;
+          x0 = e.clientX;
+          y0 = e.clientY;
+        });
+        resultEl.addEventListener("pointerup", (e) => {
+          if (x0 === null) return;
+          const dx = e.clientX - x0;
+          const dy = e.clientY - y0;
+          x0 = null;
+          if (Math.abs(dx) < 60 || Math.abs(dx) < Math.abs(dy) * 1.5) return;
+          const places = getRecents();
+          if (places.length < 2) return;
+          const here = currentPlace ? placeKey(currentPlace) : null;
+          const at = places.findIndex((p) => placeKey(p) === here);
+          const next =
+            (((at < 0 ? 0 : at) + (dx < 0 ? 1 : -1)) % places.length +
+              places.length) %
+            places.length;
+          input.value = places[next].name;
+          loadWeather(places[next]);
+        });
       }
 
       document.getElementById("recents").addEventListener("click", (e) => {
@@ -3139,6 +3406,7 @@
       if (!navigator.onLine) setOffline(true);
 
       renderRecents();
+      attachPlaceSwipe();
       const shared = placeFromUrl();
       const last = getLastPlace();
       if (shared) {
