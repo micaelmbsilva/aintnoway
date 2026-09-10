@@ -309,6 +309,45 @@
         font-size: 13px;
       }
 
+      #radarMap {
+        height: 320px;
+        border-radius: 12px;
+        overflow: hidden;
+        background: var(--chip);
+        margin-top: 12px;
+      }
+
+      @media (min-width: 760px) {
+        #radarMap {
+          height: 420px;
+        }
+      }
+
+      .radar-controls {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-top: 12px;
+      }
+
+      .radar-controls input[type="range"] {
+        flex: 1;
+        min-height: 44px;
+        accent-color: var(--accent);
+      }
+
+      .radar-controls .small {
+        min-width: 92px;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* Leaflet paints its own panes; keep them inside the rounded corner. */
+      .leaflet-container {
+        background: var(--chip);
+        font: inherit;
+      }
+
       .statusbar {
         display: flex;
         align-items: center;
@@ -1015,6 +1054,23 @@
       </div>
 
       <div id="result"></div>
+
+      <div class="card" id="radarCard" hidden>
+        <h3>Rain radar</h3>
+        <button class="icon-btn" id="radarOpen">Show radar</button>
+        <div id="radarBody" hidden>
+          <div id="radarMap"></div>
+          <div class="radar-controls">
+            <button class="icon-btn btn-sm" id="radarPlay" aria-label="Pause">⏸</button>
+            <input id="radarSlider" type="range" min="0" max="0" value="0"
+              aria-label="Radar frame" />
+            <span class="small" id="radarTime"></span>
+          </div>
+          <p class="small" id="radarCredit">
+            Radar by RainViewer · Map © OpenStreetMap contributors, © CARTO
+          </p>
+        </div>
+      </div>
 
       <div id="statusbar" class="statusbar" hidden>
         <span id="updatedAt"></span>
@@ -2754,6 +2810,7 @@
           localStorage.setItem("wx-last", JSON.stringify(place));
           addRecent(place);
           renderRecents();
+          radarGoTo(place);
           syncUrl(place);
           lastAgreement = null;
           lastHistory = null;
@@ -3280,6 +3337,171 @@
           }
         }, 150);
       });
+
+      // ---------- rain radar ----------
+
+      // Leaflet and the radar index are fetched only when someone opens the
+      // map: most visits never do, and a map library is heavier than the whole
+      // rest of this page.
+      const LEAFLET_JS =
+        "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js";
+      const LEAFLET_CSS =
+        "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css";
+      const RADAR_INDEX = "https://api.rainviewer.com/public/weather-maps.json";
+      const RADAR_PAST = 8; // frames of history; the rest is nowcast
+      const FRAME_MS = 500;
+
+      let radar = null; // { map, marker, layers, frames, i, timer, host }
+
+      function loadAsset(tag, attrs) {
+        return new Promise((resolve, reject) => {
+          const el = document.createElement(tag);
+          Object.assign(el, attrs);
+          el.onload = resolve;
+          el.onerror = () => reject(new Error(`Could not load ${attrs.src || attrs.href}`));
+          document.head.appendChild(el);
+        });
+      }
+
+      async function ensureLeaflet() {
+        if (window.L) return window.L;
+        await loadAsset("link", { rel: "stylesheet", href: LEAFLET_CSS });
+        await loadAsset("script", { src: LEAFLET_JS });
+        if (!window.L) throw new Error("Leaflet did not initialise");
+        return window.L;
+      }
+
+      async function fetchRadarFrames() {
+        const res = await fetch(RADAR_INDEX);
+        if (!res.ok) throw new Error("Radar index unavailable");
+        const data = await res.json();
+        const past = (data.radar?.past || []).slice(-RADAR_PAST);
+        const nowcast = data.radar?.nowcast || [];
+        const frames = [
+          ...past.map((f) => ({ ...f, forecast: false })),
+          ...nowcast.map((f) => ({ ...f, forecast: true })),
+        ];
+        if (!frames.length) throw new Error("No radar frames");
+        return { host: data.host, frames };
+      }
+
+      function frameLabel(f) {
+        const t = new Date(f.time * 1000).toLocaleTimeString(undefined, {
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: units.clock === "12",
+        });
+        return f.forecast ? `${t} forecast` : t;
+      }
+
+      // Layers are built on demand and kept: swapping opacity on a cached
+      // layer is instant, while re-creating one re-downloads every tile.
+      function radarLayer(i) {
+        const f = radar.frames[i];
+        if (radar.layers[i]) return radar.layers[i];
+        const layer = window.L.tileLayer(
+          `${radar.host}${f.path}/256/{z}/{x}/{y}/4/1_1.png`,
+          { opacity: 0, zIndex: 10, tileSize: 256 },
+        );
+        layer.addTo(radar.map);
+        radar.layers[i] = layer;
+        return layer;
+      }
+
+      function showFrame(i) {
+        if (!radar) return;
+        const next = (i + radar.frames.length) % radar.frames.length;
+        radarLayer(next).setOpacity(0.75);
+        radar.layers.forEach((l, k) => {
+          if (l && k !== next) l.setOpacity(0);
+        });
+        radar.i = next;
+        radarLayer((next + 1) % radar.frames.length); // warm the next tiles
+        document.getElementById("radarSlider").value = String(next);
+        document.getElementById("radarTime").textContent = frameLabel(
+          radar.frames[next],
+        );
+      }
+
+      function radarPlay(on) {
+        if (!radar) return;
+        clearInterval(radar.timer);
+        radar.timer = null;
+        const btn = document.getElementById("radarPlay");
+        if (on) {
+          radar.timer = setInterval(() => showFrame(radar.i + 1), FRAME_MS);
+          btn.textContent = "⏸";
+          btn.setAttribute("aria-label", "Pause");
+        } else {
+          btn.textContent = "▶";
+          btn.setAttribute("aria-label", "Play");
+        }
+      }
+
+      async function openRadar() {
+        const body = document.getElementById("radarBody");
+        const openBtn = document.getElementById("radarOpen");
+        if (!currentPlace) return;
+        openBtn.disabled = true;
+        openBtn.textContent = "Loading radar…";
+        try {
+          const L = await ensureLeaflet();
+          const { host, frames } = await fetchRadarFrames();
+          body.hidden = false;
+          openBtn.hidden = true;
+
+          const dark =
+            document.documentElement.dataset.theme === "dark" ||
+            (!document.documentElement.dataset.theme &&
+              matchMedia("(prefers-color-scheme: dark)").matches);
+          const map = L.map("radarMap", {
+            center: [+currentPlace.latitude, +currentPlace.longitude],
+            zoom: 7,
+            scrollWheelZoom: false, // never steal the page scroll
+            attributionControl: false,
+          });
+          L.tileLayer(
+            `https://{s}.basemaps.cartocdn.com/${dark ? "dark_all" : "light_all"}/{z}/{x}/{y}{r}.png`,
+            { maxZoom: 12, subdomains: "abcd" },
+          ).addTo(map);
+          const marker = L.circleMarker(
+            [+currentPlace.latitude, +currentPlace.longitude],
+            { radius: 5, color: "#2a78d6", fillColor: "#2a78d6", fillOpacity: 1 },
+          ).addTo(map);
+
+          radar = { map, marker, layers: [], frames, i: 0, timer: null, host };
+          const slider = document.getElementById("radarSlider");
+          slider.max = String(frames.length - 1);
+          // Open on the newest observed frame, not on a forecast one.
+          const firstForecast = frames.findIndex((f) => f.forecast);
+          showFrame(firstForecast > 0 ? firstForecast - 1 : frames.length - 1);
+          radarPlay(true);
+        } catch (err) {
+          openBtn.disabled = false;
+          openBtn.textContent = "Radar unavailable — try again";
+        }
+      }
+
+      document.getElementById("radarOpen").addEventListener("click", openRadar);
+
+      document.getElementById("radarPlay").addEventListener("click", () => {
+        radarPlay(!radar?.timer);
+      });
+
+      document.getElementById("radarSlider").addEventListener("input", (e) => {
+        radarPlay(false);
+        showFrame(+e.target.value);
+      });
+
+      // The map lives outside #result so re-renders leave it alone; a new
+      // place just moves the view.
+      function radarGoTo(place) {
+        document.getElementById("radarCard").hidden = false;
+        if (!radar) return;
+        const at = [+place.latitude, +place.longitude];
+        radar.map.setView(at, radar.map.getZoom());
+        radar.marker.setLatLng(at);
+      }
 
       // ---------- settings sheet ----------
 
