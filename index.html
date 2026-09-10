@@ -505,11 +505,85 @@
         font-size: 13px;
       }
 
+      .nowcast {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        flex-wrap: wrap;
+      }
+
+      .nowcast .nc-text {
+        font-size: 15px;
+        color: var(--text);
+        flex: 1 1 190px;
+        min-width: 0;
+      }
+
+      .nowcast .nc-text b {
+        font-weight: 600;
+      }
+
+      .nc-bars {
+        display: flex;
+        align-items: flex-end;
+        gap: 3px;
+        height: 44px;
+        flex: 1 1 180px;
+      }
+
+      .nc-bars i {
+        flex: 1;
+        background: var(--rain);
+        border-radius: 3px 3px 0 0;
+        min-height: 2px;
+        opacity: 0.85;
+      }
+
+      .nc-bars i.dry {
+        background: var(--grid);
+        opacity: 1;
+      }
+
+      .nc-axis {
+        display: flex;
+        justify-content: space-between;
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 6px;
+        flex-basis: 100%;
+      }
+
       .day-summary {
         margin: 12px 0 0;
         color: var(--text-2);
         font-size: 15px;
         line-height: 1.55;
+      }
+
+      .agreement {
+        margin-top: 12px;
+        font-size: 13px;
+        color: var(--muted);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .agree-dots {
+        display: inline-flex;
+        gap: 4px;
+      }
+
+      .agree-dots i {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--grid);
+      }
+
+      .agree-dots i.on {
+        background: var(--rain);
       }
 
       .wear {
@@ -866,6 +940,14 @@
         </div>
       </div>
       <div class="opt-row">
+        <span id="lbl-tone">Summary tone</span>
+        <div class="seg" role="group" aria-labelledby="lbl-tone" data-setting="tone">
+          <button data-value="plain" aria-pressed="false">Plain</button>
+          <button data-value="brief" aria-pressed="false">Brief</button>
+          <button data-value="blunt" aria-pressed="false">Blunt</button>
+        </div>
+      </div>
+      <div class="opt-row">
         <span id="lbl-clock">Clock</span>
         <div class="seg" role="group" aria-labelledby="lbl-clock" data-unit="clock">
           <button data-value="24" aria-pressed="false">24-hour</button>
@@ -960,6 +1042,12 @@
       // Formatted temperature with degree sign; unit suffix optional.
       function fTemp(v, withUnit) {
         return `${Math.round(cTemp(v))}${withUnit ? tempSuffix() : "°"}`;
+      }
+
+      // A temperature *difference* scales but never shifts — 5°C apart is
+      // 9°F apart, not 41.
+      function fDelta(v) {
+        return `${Math.round(units.temp === "f" ? v * 1.8 : v)}°`;
       }
 
       function cWind(v) {
@@ -1063,11 +1151,32 @@
         const url =
           `${FORECAST_URL}?latitude=${lat}&longitude=${lon}` +
           `&current=temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,cloud_cover,wind_speed_10m,precipitation` +
+          `&minutely_15=precipitation,precipitation_probability` +
           `&hourly=temperature_2m,apparent_temperature,relative_humidity_2m,precipitation_probability,precipitation,weather_code,wind_speed_10m,cloud_cover` +
           `&daily=weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,apparent_temperature_min,precipitation_probability_max,precipitation_sum,wind_speed_10m_max,uv_index_max,sunrise,sunset` +
           `&forecast_days=7&timezone=auto`;
         const res = await fetch(url);
         if (!res.ok) throw new Error("Weather request failed");
+        return res.json();
+      }
+
+      // Independent runs of the same day. Where they disagree, the headline
+      // forecast is a coin flip and saying so beats projecting false certainty.
+      const MODELS = [
+        ["ecmwf_ifs025", "ECMWF"],
+        ["gfs_seamless", "GFS"],
+        ["icon_seamless", "ICON"],
+        ["gem_seamless", "GEM"],
+      ];
+
+      async function fetchAgreement(lat, lon) {
+        const url =
+          `${FORECAST_URL}?latitude=${lat}&longitude=${lon}` +
+          `&daily=precipitation_sum,temperature_2m_max` +
+          `&models=${MODELS.map((m) => m[0]).join(",")}` +
+          `&forecast_days=1&timezone=auto`;
+        const res = await fetch(url);
+        if (!res.ok) throw new Error("Model comparison failed");
         return res.json();
       }
 
@@ -1212,33 +1321,78 @@
         return "Rain";
       }
 
+      // Three voices over the same facts. Tone is a retention feature, not a
+      // data feature: the numbers never change, only how blunt the sentence is.
+      const TONES = { plain: "Plain", brief: "Brief", blunt: "Blunt" };
+      let tone = localStorage.getItem("wx-tone") || "plain";
+      if (!TONES[tone]) tone = "plain";
+
+      function rainWindows(w, st) {
+        return st.rain
+          .slice(0, 2)
+          .map(
+            ([a, b]) =>
+              `${clockLabel(w.hourly.time[a])}–${clockLabel(w.hourly.time[b] ?? w.hourly.time[b - 1])}`,
+          )
+          .join(" and ");
+      }
+
       function summaryText(w, st) {
-        const cond = wmo(st.code)[1].toLowerCase();
+        const condRaw = wmo(st.code)[1];
+        const cond = condRaw === "—" ? "Mixed conditions" : condRaw;
+        const word = precipWord(st.code).toLowerCase();
+        const windows = st.rain.length ? rainWindows(w, st) : "";
+
+        if (tone === "brief") {
+          const bits = [
+            cond,
+            `${fTemp(st.lo)}–${fTemp(st.hi, true)}`,
+            windows
+              ? `${word} ${windows}`
+              : st.prob >= 20
+                ? `${st.prob}% ${word}`
+                : "dry",
+          ];
+          if (st.wind >= 25) bits.push(`wind ${fWind(st.wind, true)}`);
+          if (st.uv >= 6) bits.push(`UV ${Math.round(st.uv)}`);
+          bits.push(`sunset ${clockLabel(w.daily.sunset[0])}`);
+          return bits.join(" · ");
+        }
+
+        if (tone === "blunt") {
+          const out = [];
+          if (windows) out.push(`${word[0].toUpperCase()}${word.slice(1)} ${windows}. Plan around it.`);
+          else if (st.prob >= 30) out.push(`Might catch a shower, ${st.prob}% at worst.`);
+          else out.push("Staying dry.");
+          out.push(
+            st.feelsHi <= 8
+              ? `Cold — ${fTemp(st.feelsHi, true)} at best.`
+              : st.feelsHi >= 28
+                ? `Hot — feels ${fTemp(st.feelsHi, true)}.`
+                : `Tops out at ${fTemp(st.hi, true)}, down to ${fTemp(st.lo)} overnight.`,
+          );
+          if (st.wind >= 45) out.push("Wind will be a problem.");
+          if (st.uv >= 8) out.push("Sun will burn you.");
+          out.push(`Dark by ${clockLabel(w.daily.sunset[0])}.`);
+          return out.join(" ");
+        }
+
         const parts = [];
         parts.push(
-          `${cond === "—" ? "Mixed conditions" : cond.charAt(0).toUpperCase() + cond.slice(1)} today, ` +
+          `${cond.charAt(0).toUpperCase() + cond.slice(1).toLowerCase()} today, ` +
             `${fTemp(st.lo)} to ${fTemp(st.hi, true)}, warmest around ${clockLabel(st.warmestHour)}.`,
         );
 
-        if (Math.round(st.feelsHi) !== Math.round(st.hi))
+        if (Math.round(cTemp(st.feelsHi)) !== Math.round(cTemp(st.hi)))
           parts.push(`Feels closer to ${fTemp(st.feelsHi)} at its peak.`);
 
-        if (st.rain.length) {
-          const windows = st.rain
-            .slice(0, 2)
-            .map(
-              ([a, b]) =>
-                `${clockLabel(w.hourly.time[a])}–${clockLabel(w.hourly.time[b] ?? w.hourly.time[b - 1])}`,
-            )
-            .join(" and ");
+        if (windows)
           parts.push(
             `${precipWord(st.code)} most likely ${windows} (${st.prob}% peak, ${fPrecip(st.sum, true)} total).`,
           );
-        } else if (st.prob >= 20) {
+        else if (st.prob >= 20)
           parts.push(`Showers possible but unlikely (${st.prob}% peak).`);
-        } else {
-          parts.push("Little to no rain expected.");
-        }
+        else parts.push("Little to no rain expected.");
 
         if (st.wind >= 45) parts.push(`Strong wind, gusting to ${fWind(st.wind, true)}.`);
         else if (st.wind >= 25) parts.push(`Breezy, up to ${fWind(st.wind, true)}.`);
@@ -1281,6 +1435,122 @@
         return items;
       }
 
+      // ---------- next two hours ----------
+
+      const NOWCAST_STEPS = 8; // 8 x 15 min
+      const WET_MM = 0.1;
+      const WET_PROB = 50;
+
+      // Returns null when there is nothing worth saying: a dry strip is noise.
+      function nowcast(w) {
+        const m = w.minutely_15;
+        if (!m || !m.time) return null;
+        const start = m.time.findIndex((t) => t >= w.current.time);
+        if (start < 0) return null;
+        const steps = [];
+        for (let i = start; i < Math.min(start + NOWCAST_STEPS, m.time.length); i++)
+          steps.push({
+            time: m.time[i],
+            mm: m.precipitation[i] ?? 0,
+            prob: m.precipitation_probability?.[i] ?? 0,
+          });
+        if (steps.length < 2) return null;
+
+        const wet = (s) => s.mm >= WET_MM || s.prob >= WET_PROB;
+        if (!steps.some(wet)) return null;
+
+        const word = precipWord(w.current.weather_code).toLowerCase();
+        const first = steps.findIndex(wet);
+        let text;
+        if (first === 0) {
+          // Already falling — the useful number is when it stops.
+          const stop = steps.findIndex((s, i) => i > 0 && !wet(s));
+          text =
+            stop < 0
+              ? `<b>${word[0].toUpperCase()}${word.slice(1)}</b> for at least the next 2 hours.`
+              : `<b>${word[0].toUpperCase()}${word.slice(1)} easing around ${clockLabel(steps[stop].time)}</b>.`;
+        } else {
+          text = `<b>${word[0].toUpperCase()}${word.slice(1)} starting around ${clockLabel(steps[first].time)}</b> — about ${first * 15} min from now.`;
+        }
+
+        return { steps, text };
+      }
+
+      function renderNowcast(w) {
+        const nc = nowcast(w);
+        if (!nc) return "";
+        const peak = Math.max(0.4, ...nc.steps.map((s) => s.mm));
+        const bars = nc.steps
+          .map((s) => {
+            const h = Math.round((Math.min(s.mm, peak) / peak) * 100);
+            const dry = s.mm < WET_MM;
+            return `<i class="${dry ? "dry" : ""}" style="height:${dry ? 4 : Math.max(8, h)}%"
+                      title="${clockLabel(s.time)} · ${fPrecip(s.mm, true)}"></i>`;
+          })
+          .join("");
+        return `
+          <div class="card">
+            <div class="nowcast">
+              <div class="nc-text">${nc.text}</div>
+              <div class="nc-bars" role="img"
+                aria-label="Precipitation over the next two hours">${bars}</div>
+              <div class="nc-axis">
+                <span>${clockLabel(nc.steps[0].time)}</span>
+                <span>${clockLabel(nc.steps[nc.steps.length - 1].time)}</span>
+              </div>
+            </div>
+          </div>`;
+      }
+
+      // How many models call today's rain the same way the headline does.
+      function agreementFrom(data, headlineWet) {
+        const runs = [];
+        for (const [key, label] of MODELS) {
+          const sum = data.daily?.[`precipitation_sum_${key}`]?.[0];
+          const max = data.daily?.[`temperature_2m_max_${key}`]?.[0];
+          if (sum == null && max == null) continue;
+          runs.push({ label, wet: (sum ?? 0) >= 0.5, max });
+        }
+        if (runs.length < 2) return null;
+        const agree = runs.filter((r) => r.wet === headlineWet).length;
+        const temps = runs.map((r) => r.max).filter((v) => v != null);
+        const spread = temps.length
+          ? Math.max(...temps) - Math.min(...temps)
+          : 0;
+        return { agree, total: runs.length, spread };
+      }
+
+      function renderAgreement(a, headlineWet) {
+        const el = document.getElementById("agreement");
+        if (!el || !a) return;
+        const dots = Array.from(
+          { length: a.total },
+          (_, i) => `<i class="${i < a.agree ? "on" : ""}"></i>`,
+        ).join("");
+        const call = headlineWet ? "rain" : "a dry day";
+        let text = `${a.agree} of ${a.total} models agree on ${call}`;
+        if (a.agree === a.total) text += " — high confidence";
+        else if (a.agree * 2 <= a.total) text += " — treat today as uncertain";
+        if (a.spread >= 4)
+          text += `, and they differ by ${fDelta(a.spread)} on the high`;
+        el.innerHTML = `<span class="agree-dots" aria-hidden="true">${dots}</span><span>${escapeHtml(text)}.</span>`;
+        el.hidden = false;
+      }
+
+      // Fired after the page has already rendered: a slow or failed comparison
+      // must never hold up the forecast itself.
+      async function loadAgreement(place, headlineWet) {
+        try {
+          const data = await fetchAgreement(place.latitude, place.longitude);
+          lastAgreement = { data, headlineWet };
+          renderAgreement(agreementFrom(data, headlineWet), headlineWet);
+        } catch {
+          /* comparison is a bonus, not a requirement */
+        }
+      }
+
+      let lastAgreement = null; // kept so a re-render can restore the line
+
       function renderToday(w) {
         const st = dayStats(w);
         const items = wearAdvice(st)
@@ -1300,6 +1570,7 @@
               </div>
             </div>
             <p class="day-summary">${escapeHtml(summaryText(w, st))}</p>
+            <div class="agreement" id="agreement" hidden></div>
             <div class="wear">
               <h4>Recommended wear</h4>
               <div class="wear-items">${items}</div>
@@ -1876,11 +2147,17 @@
         if (!wxData || !currentPlace) return;
         resultEl.innerHTML =
           renderCurrent(currentPlace, wxData) +
+          renderNowcast(wxData) +
           renderToday(wxData) +
           renderHourlyCard() +
           renderDaily(wxData);
         refreshHourly();
         renderStatus();
+        if (lastAgreement)
+          renderAgreement(
+            agreementFrom(lastAgreement.data, lastAgreement.headlineWet),
+            lastAgreement.headlineWet,
+          );
       }
 
       async function loadWeather(place, opts = {}) {
@@ -1901,6 +2178,8 @@
           localStorage.setItem("wx-last", JSON.stringify(place));
           addRecent(place);
           syncUrl(place);
+          lastAgreement = null;
+          loadAgreement(place, (w.daily.precipitation_sum?.[0] ?? 0) >= 0.5);
         } catch (err) {
           // A cached response served by the service worker still renders; a
           // hard failure with nothing cached is the only true error state.
@@ -2223,12 +2502,9 @@
 
       function syncSegments() {
         for (const seg of sheet.querySelectorAll(".seg")) {
-          const key = seg.dataset.unit;
+          const current = seg.dataset.unit ? units[seg.dataset.unit] : tone;
           for (const b of seg.querySelectorAll("button"))
-            b.setAttribute(
-              "aria-pressed",
-              String(b.dataset.value === units[key]),
-            );
+            b.setAttribute("aria-pressed", String(b.dataset.value === current));
         }
       }
 
@@ -2259,8 +2535,14 @@
       sheet.addEventListener("click", (e) => {
         const btn = e.target.closest(".seg button");
         if (!btn) return;
-        units[btn.closest(".seg").dataset.unit] = btn.dataset.value;
-        saveUnits();
+        const seg = btn.closest(".seg");
+        if (seg.dataset.unit) {
+          units[seg.dataset.unit] = btn.dataset.value;
+          saveUnits();
+        } else {
+          tone = btn.dataset.value;
+          localStorage.setItem("wx-tone", tone);
+        }
         syncSegments();
         renderAll(); // metric data, new formatting — no refetch
       });
